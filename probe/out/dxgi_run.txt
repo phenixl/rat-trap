@@ -1,0 +1,58 @@
+=== DXGI Desktop Duplication pointer-shape probe ===
+CursorBaseSize = 80 ; SM_CXCURSOR = 32
+GetCursorInfo: flags=0x1 pos=(855,966) hCursor=0000000000010003
+  GetIconInfo hbmColor = 32x32 hotspot=(0,0)
+D3D11CreateDevice hr=0x0
+output[0] \\.\DISPLAY1 rect=(0,0)-(2752,1152) containsCursor=1
+DuplicateOutput hr=0x0
+duplication desc: mode=87 rotation=1 desktopImage=3440x1440
+[0] frame: PointerShapeBufferSize=30972 PointerPosition=(0,0) LastMouseUpdate=129167848389 AccumulatedFrames=0
+      GetFramePointerShape hr=0x0 needed=30972 Type=2 Width=89 Height=87 Pitch=356 HotSpot=(3,3)
+      shapeHash=B31EFE411D38F93B distinctFromPrevious=0 bufferBytes=30972 expectedBytes=30972
+      saved dxgi_shape_0_89x87_t2
+[1] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=2
+[2] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[3] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[4] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[5] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[6] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[7] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[8] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[9] frame: PointerShapeBufferSize=25600 PointerPosition=(0,0) LastMouseUpdate=129169288156 AccumulatedFrames=0
+      GetFramePointerShape hr=0x0 needed=25600 Type=4 Width=80 Height=80 Pitch=320 HotSpot=(23,25)
+      shapeHash=311558AE14FECAEE distinctFromPrevious=1 bufferBytes=25600 expectedBytes=25600
+      saved dxgi_shape_1_80x80_t4
+[10] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[11] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[12] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[13] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[14] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[15] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[16] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[17] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[18] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[19] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[20] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[21] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[22] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[23] frame: PointerShapeBufferSize=30972 PointerPosition=(0,0) LastMouseUpdate=129172121852 AccumulatedFrames=0
+      GetFramePointerShape hr=0x0 needed=30972 Type=2 Width=89 Height=87 Pitch=356 HotSpot=(3,3)
+      shapeHash=B31EFE411D38F93B distinctFromPrevious=1 bufferBytes=30972 expectedBytes=30972
+      saved dxgi_shape_2_89x87_t2
+[24] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[25] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[26] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[27] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[28] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[29] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[30] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[31] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[32] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[33] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[34] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[35] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[36] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[37] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[38] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+[39] frame: PointerShapeBufferSize=0 PointerPosition=(0,0) LastMouseUpdate=0 AccumulatedFrames=1
+=== done ===

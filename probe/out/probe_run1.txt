@@ -1,0 +1,191 @@
+=== CursorTrap probe ===
+
+--- 1. system metrics ---
+  SM_CXCURSOR=32 SM_CYCURSOR=32 SM_CXICON=32 SM_CYICON=32 SM_CXSMICON=16 SM_CYSMICON=16
+  GetDpiForSystem=96
+
+--- 2. registry cursor settings ---
+  Control Panel\Cursors\CursorBaseSize = 80
+  Control Panel\Cursors\Scheme Source = 2
+  Software\Microsoft\Accessibility\CursorSize = 4
+  Control Panel\Desktop\LogPixels = 96
+
+--- 3. monitors ---
+  [0] \\.\DISPLAY2 rect=(770,1440)-(2690,2520) 1920x1080 dpi=96x96 (hr=0x0) primary=0
+  [1] \\.\DISPLAY1 rect=(0,0)-(2752,1152) 2752x1152 dpi=96x96 (hr=0x0) primary=1
+
+--- 4. live cursor (GetCursorInfo) ---
+  flags=0x1 (CURSOR_SHOWING=1) ptScreenPos=(2160,2037) hCursor=0000000000010019
+  monitor under cursor dpi=96x96 ; CursorBaseSize*scale = 80*96/96 = 80.0
+  -- direct GetIconInfo on live hCursor --
+  [live-direct] hotspot=(0,8) fIcon=0
+  hbmColor: 32x32 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=128
+    reader: GetDIBits
+    hbmColor alpha: nonzero=212/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\live_direct_color.bgra (32x32 raw BGRA top-down)
+  hbmMask: 32x32 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=4
+  -- CopyIcon then GetIconInfo (owned handle) --
+  [live-copyicon] hotspot=(0,8) fIcon=0
+  hbmColor: 32x32 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=128
+    reader: GetDIBits
+    hbmColor alpha: nonzero=212/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\live_copyicon_color.bgra (32x32 raw BGRA top-down)
+  hbmMask: 32x32 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=4
+  [DrawTest live_native] DrawIconEx(32x32) ok=1 gle=0
+    live_native alpha: nonzero=212/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_native.bgra (32x32 raw BGRA top-down)
+  [DrawTest live_80] DrawIconEx(80x80) ok=1 gle=0
+    live_80 alpha: nonzero=1350/6400 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_80.bgra (80x80 raw BGRA top-down)
+  [DrawTest live_160] DrawIconEx(160x160) ok=1 gle=0
+    live_160 alpha: nonzero=5300/25600 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_160.bgra (160x160 raw BGRA top-down)
+  (mouse may be over console - move it and we resample)
+  flags=0x1 (CURSOR_SHOWING=1) ptScreenPos=(2162,2037) hCursor=0000000000010003
+  monitor under cursor dpi=96x96 ; CursorBaseSize*scale = 80*96/96 = 80.0
+  -- direct GetIconInfo on live hCursor --
+  [live-direct] hotspot=(0,0) fIcon=0
+  hbmColor: 32x32 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=128
+    reader: GetDIBits
+    hbmColor alpha: nonzero=105/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\live_direct_color.bgra (32x32 raw BGRA top-down)
+  hbmMask: 32x32 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=4
+  -- CopyIcon then GetIconInfo (owned handle) --
+  [live-copyicon] hotspot=(0,0) fIcon=0
+  hbmColor: 32x32 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=128
+    reader: GetDIBits
+    hbmColor alpha: nonzero=105/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\live_copyicon_color.bgra (32x32 raw BGRA top-down)
+  hbmMask: 32x32 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=4
+  [DrawTest live_native] DrawIconEx(32x32) ok=1 gle=0
+    live_native alpha: nonzero=105/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_native.bgra (32x32 raw BGRA top-down)
+  [DrawTest live_80] DrawIconEx(80x80) ok=1 gle=0
+    live_80 alpha: nonzero=667/6400 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_80.bgra (80x80 raw BGRA top-down)
+  [DrawTest live_160] DrawIconEx(160x160) ok=1 gle=0
+    live_160 alpha: nonzero=2625/25600 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_160.bgra (160x160 raw BGRA top-down)
+  flags=0x1 (CURSOR_SHOWING=1) ptScreenPos=(2169,2015) hCursor=0000000000010003
+  monitor under cursor dpi=96x96 ; CursorBaseSize*scale = 80*96/96 = 80.0
+  -- direct GetIconInfo on live hCursor --
+  [live-direct] hotspot=(0,0) fIcon=0
+  hbmColor: 32x32 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=128
+    reader: GetDIBits
+    hbmColor alpha: nonzero=105/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\live_direct_color.bgra (32x32 raw BGRA top-down)
+  hbmMask: 32x32 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=4
+  -- CopyIcon then GetIconInfo (owned handle) --
+  [live-copyicon] hotspot=(0,0) fIcon=0
+  hbmColor: 32x32 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=128
+    reader: GetDIBits
+    hbmColor alpha: nonzero=105/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\live_copyicon_color.bgra (32x32 raw BGRA top-down)
+  hbmMask: 32x32 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=4
+  [DrawTest live_native] DrawIconEx(32x32) ok=1 gle=0
+    live_native alpha: nonzero=105/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_native.bgra (32x32 raw BGRA top-down)
+  [DrawTest live_80] DrawIconEx(80x80) ok=1 gle=0
+    live_80 alpha: nonzero=667/6400 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_80.bgra (80x80 raw BGRA top-down)
+  [DrawTest live_160] DrawIconEx(160x160) ok=1 gle=0
+    live_160 alpha: nonzero=2625/25600 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\draw_live_160.bgra (160x160 raw BGRA top-down)
+
+--- 5. theme cursor files on disk ---
+  FILE C:\Windows\Cursors\aero_arrow.cur  type=2 (CUR) entries=5 size=136606
+    [0] 128x128 hotspot=(0,0) rawPlanes=0 rawBitCount=0 BMP bytes=67624 off=86
+    [1] 96x96 hotspot=(0,0) rawPlanes=0 rawBitCount=0 BMP bytes=38056 off=67710
+    [2] 64x64 hotspot=(0,0) rawPlanes=0 rawBitCount=0 BMP bytes=16936 off=105766
+    [3] 48x48 hotspot=(0,0) rawPlanes=0 rawBitCount=0 BMP bytes=9640 off=122702
+    [4] 32x32 hotspot=(0,0) rawPlanes=0 rawBitCount=0 BMP bytes=4264 off=132342
+  FILE C:\Windows\Cursors\aero_link.cur  type=2 (CUR) entries=5 size=136606
+    [0] 128x128 hotspot=(25,0) rawPlanes=25 rawBitCount=0 BMP bytes=67624 off=86
+    [1] 96x96 hotspot=(20,0) rawPlanes=20 rawBitCount=0 BMP bytes=38056 off=67710
+    [2] 64x64 hotspot=(13,0) rawPlanes=13 rawBitCount=0 BMP bytes=16936 off=105766
+    [3] 48x48 hotspot=(10,0) rawPlanes=10 rawBitCount=0 BMP bytes=9640 off=122702
+    [4] 32x32 hotspot=(6,0) rawPlanes=6 rawBitCount=0 BMP bytes=4264 off=132342
+  FILE C:\Windows\Cursors\aero_busy.ani  RIFF/ACON size=556304
+    chunk 'anih' len=36 at 12
+      ANIH: cbSize=36 cFrames=18 cSteps=18 cx=0 cy=0 cBitCount=32 cPlanes=1 jifRate=3 flags=0x1 (AF_ICON )
+      => default frame duration = 3 jiffies = 50.0 ms
+    chunk 'LIST' len=556240 at 56
+      LIST type='fram'; scanning 'fram' subchunks
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+    summary: 18 frames, 18 steps, 0 rates, 0 seq entries
+  FILE C:\Windows\Cursors\aero_working.ani  RIFF/ACON size=556304
+    chunk 'anih' len=36 at 12
+      ANIH: cbSize=36 cFrames=18 cSteps=18 cx=0 cy=0 cBitCount=32 cPlanes=1 jifRate=3 flags=0x1 (AF_ICON )
+      => default frame duration = 3 jiffies = 50.0 ms
+    chunk 'LIST' len=556240 at 56
+      LIST type='fram'; scanning 'fram' subchunks
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+        subchunk 'icon' len=30894
+    summary: 18 frames, 18 steps, 0 rates, 0 seq entries
+
+--- 6. LoadCursorFromFile / LoadImage sizing ---
+  file: C:\Windows\Cursors\aero_arrow.cur
+    LoadImage(LR_DEFAULTSIZE) ok
+  [loadimage-defaultsize] hotspot=(0,0) fIcon=0
+  hbmColor: 32x32 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=128
+    reader: GetDIBits
+    hbmColor alpha: nonzero=105/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\file_arrow_lrdefault_color.bgra (32x32 raw BGRA top-down)
+  hbmMask: 32x32 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=4
+    LoadImage(no flags) ok
+  [loadimage-plain] hotspot=(0,0) fIcon=0
+  hbmColor: 128x128 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=512
+    reader: GetDIBits
+    hbmColor alpha: nonzero=1694/16384 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\file_arrow_plain_color.bgra (128x128 raw BGRA top-down)
+  hbmMask: 128x128 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=16
+  file: C:\Windows\Cursors\aero_busy.ani
+    LoadImage(LR_DEFAULTSIZE) ok
+  [loadimage-defaultsize] hotspot=(16,16) fIcon=0
+  hbmColor: 32x32 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=128
+    reader: GetDIBits
+    hbmColor alpha: nonzero=186/1024 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\file_busy_lrdefault_color.bgra (32x32 raw BGRA top-down)
+  hbmMask: 32x32 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=4
+    LoadImage(no flags) ok
+  [loadimage-plain] hotspot=(32,32) fIcon=0
+  hbmColor: 64x64 bpp=32 planes=1 bmBits=null(DDB) bmWidthBytes=256
+    reader: GetDIBits
+    hbmColor alpha: nonzero=823/4096 full255=0 min=0 max=254
+    saved C:\ai-projects\cursor-trap\probe\out\file_busy_plain_color.bgra (64x64 raw BGRA top-down)
+  hbmMask: 64x64 bpp=1 planes=1 bmBits=null(DDB) bmWidthBytes=8
+
+--- done ---

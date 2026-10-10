@@ -1,0 +1,28 @@
+=== MagProbe4: magnifier output minus screen BitBlt = the real cursor ===
+MagInitialize -> 1
+cursor at (855,966) hCursor=0000000000000000 hotspot=(0,0)
+largest aero_link entry: 128x128 hotspot=(25,0)
+  saved p4_cand_big_native (128x128)
+  saved p4_cand_big_to_80 (80x80)
+monitor=(0,0)-(2752,1152) source=(727,838,983,1094) host=(0,0)
+host=00000000001C0C10 mag=0000000000170B7A err=6 style=0x50000001
+mag window rect=(0,0)-(256,256)
+MagSetWindowSource -> 1
+  saved p4_magOut0 (256x256)
+  saved p4_srcActual (256x256)
+[pass0] magOut-vs-screen diff pixels=65536 bbox=(0,0)-(256,256) => 256x256
+        cursor position in tile = (128,128); diff origin relative to cursor = (-128,-128)
+  saved p4_cursorPatch_x0_y0 (256x256)
+  saved p4_underPatch_x0_y0 (256x256)
+        patch origin in tile = (0,0)
+  saved p4_magOut1 (256x256)
+[pass1] magOut-vs-screen diff pixels=65536 bbox=(0,0)-(256,256) => 256x256
+        cursor position in tile = (128,128); diff origin relative to cursor = (-128,-128)
+  saved p4_magOut2 (256x256)
+[pass2] magOut-vs-screen diff pixels=65536 bbox=(0,0)-(256,256) => 256x256
+        cursor position in tile = (128,128); diff origin relative to cursor = (-128,-128)
+MagShowSystemCursor(FALSE) -> 1
+after MagShowSystemCursor(FALSE): magnifier-vs-screen diff pixels=65536
+  saved p4_after_hide (256x256)
+MagShowSystemCursor(TRUE) -> 1
+=== done ===

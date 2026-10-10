@@ -1,0 +1,42 @@
+# Build output
+bin/
+obj/
+publish/
+native/
+*.user
+*.suo
+
+# Visual Studio's per-user state and index files. These are machine-specific, sometimes locked
+# by a running IDE (which makes `git add` fail outright), and never belong in the history.
+.vs/
+.vscode/
+.idea/
+
+# Signing material must never enter the repository. The certificate and its private key live
+# outside the project tree (see tools/sign.ps1) precisely so that they cannot be committed by
+# accident and can be shared with other projects.
+*.pfx
+*.pvk
+*.snk
+*.cer
+*.crt
+*.key
+
+# Scratch directories used while developing and verifying
+_*/
+rattrap-out/
+
+# The original C++ probes under probe/ keep their sources, the probe scripts and the text logs,
+# because those logs are the evidence behind docs/measured-behaviour.md. What is excluded is what
+# can be rebuilt or regenerated: compiled objects, and the raw BGRA dumps (about 9.5 MB of them,
+# reproducible by rerunning the probes).
+probe/build/
+*.bgra
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Transient output
+*.log

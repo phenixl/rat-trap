@@ -1,0 +1,20 @@
+=== DXGI probe 2 (hold=14s) ===
+--- BEFORE dpi awareness ---
+  GetDpiForSystem=96 SM_CXSCREEN=2752 SM_CYSCREEN=1152
+  GetCursorPos=(1636,1931)
+--- SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) -> 1 gle=0 ---
+  GetDpiForSystem=120 SM_CXSCREEN=3440 SM_CYSCREEN=1440
+  GetCursorPos=(1636,1931)
+  GetCursorInfo: flags=0x1 CURSOR_SHOWING=1 pos=(1636,1931)
+  live hbmColor=32x32 hotspot=(0,0)
+  CursorBaseSize=80
+  output[0] \\.\DISPLAY1 rect=(0,0)-(3440,1440) dpi=120x120 containsCursor=0
+  output[1] \\.\DISPLAY2 rect=(770,1440)-(2690,2520) dpi=96x96 containsCursor=1
+DuplicateOutput -> hr=0x0 OK
+  desc: img=1920x1080 fmt=87 rotation=1
+  frame: shapeBytes=30972 PointerPosition=(863,487) Visible=1
+    shape: Type=2 Width=89 Height=87 Pitch=356 HotSpot=(3,3) bytes=30972
+    alpha: 0=6622 255=40 intermediate=1081
+  holding duplication for 14 s ...
+RESULT: duplication OK
+=== done ===

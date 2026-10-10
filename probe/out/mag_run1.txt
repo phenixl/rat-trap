@@ -1,0 +1,120 @@
+=== MagProbe: can Magnification API isolate the real cursor? ===
+MagInitialize -> 1
+monitor=(0,0)-(2752,1152) cursor=(1290,954) host at (0,0)
+host=0000000000130D90 err=0
+mag=0000000000180BB0 err=6
+MagSetImageScalingCallback -> 1 (gle=6)
+window under cursor: 00000000000516FE root=0000000000090048 desktop=000000000001000C host=0000000000130D90
+  === variant A_nofilter : mode=0x0 (EXCLUDE) count=0
+      MagSetWindowFilterList -> 1 gle=0
+      MagGetWindowFilterList -> count=0 mode=0x0
+    [scalingCB #1] variant=A_nofilter
+        src  256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        dest 256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        unclipped=(0,0,256,256) clipped=(0,0,256,256) srcdata=00000192895B9820 destdata=00000192895754A0
+        dumped C:\ai-projects\cursor-trap\probe\out\cb_A_nofilter_1.bgra (256x256)
+      cursor=(1177,626) MagSetWindowSource=(1049,498,1305,754) -> 1 ; MagGetWindowSource=(1049,498,1305,754)
+      cursor offset inside mag client = (128,128)
+      scalingCB invocations during this variant = 0
+      [screenBitBlt] distinctColors=2867 dominant=#151517 (61368 px = 93.6%)  nonBgBox=(0,147)-(256,176) => 256x29
+      saved C:\ai-projects\cursor-trap\probe\out\mag_A_nofilter_screen.bgra (256x256)
+      PrintWindow(PW_RENDERFULLCONTENT) ok=1
+      [printWindow] distinctColors=438 dominant=#151517 (63265 px = 96.5%)  nonBgBox=(0,118)-(256,140) => 256x22
+      saved C:\ai-projects\cursor-trap\probe\out\mag_A_nofilter_pw.bgra (256x256)
+  === variant B_excl_under_showm agcursor : mode=0x1 (INCLUDE|SHOWMAGNIFIEDCURSOR) count=1
+      MagSetWindowFilterList -> 1 gle=0
+      MagGetWindowFilterList -> count=1 mode=0x1 hwnd[0]=0000000000090048
+    [scalingCB #2] variant=B_excl_under_showm agcursor
+        src  256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        dest 256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        unclipped=(0,0,256,256) clipped=(0,0,256,256) srcdata=00000192895B9820 destdata=00000192895754A0
+        dumped C:\ai-projects\cursor-trap\probe\out\cb_B_excl_under_showm agcursor_2.bgra (256x256)
+      cursor=(1102,615) MagSetWindowSource=(974,487,1230,743) -> 1 ; MagGetWindowSource=(974,487,1230,743)
+      cursor offset inside mag client = (128,128)
+      scalingCB invocations during this variant = 0
+      [screenBitBlt] distinctColors=4655 dominant=#151517 (58257 px = 88.9%)  nonBgBox=(0,0)-(256,194) => 256x194
+      saved C:\ai-projects\cursor-trap\probe\out\mag_B_excl_under_showm agcursor_screen.bgra (256x256)
+      PrintWindow(PW_RENDERFULLCONTENT) ok=1
+      [printWindow] distinctColors=607 dominant=#151517 (61501 px = 93.8%)  nonBgBox=(0,0)-(256,155) => 256x155
+      saved C:\ai-projects\cursor-trap\probe\out\mag_B_excl_under_showm agcursor_pw.bgra (256x256)
+  === variant C_excl_under_plain : mode=0x0 (EXCLUDE) count=1
+      MagSetWindowFilterList -> 1 gle=0
+      MagGetWindowFilterList -> count=1 mode=0x0 hwnd[0]=0000000000090048
+    [scalingCB #3] variant=C_excl_under_plain
+        src  256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        dest 256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        unclipped=(0,0,256,256) clipped=(0,0,256,256) srcdata=00000192895B9820 destdata=00000192895754A0
+      cursor=(1102,614) MagSetWindowSource=(974,486,1230,742) -> 1 ; MagGetWindowSource=(974,486,1230,742)
+      cursor offset inside mag client = (128,128)
+      scalingCB invocations during this variant = 0
+      [screenBitBlt] distinctColors=284 dominant=#191919 (64270 px = 98.1%)  nonBgBox=(0,3)-(256,253) => 256x250
+      saved C:\ai-projects\cursor-trap\probe\out\mag_C_excl_under_plain_screen.bgra (256x256)
+      PrintWindow(PW_RENDERFULLCONTENT) ok=1
+      [printWindow] distinctColors=25 dominant=#191919 (65064 px = 99.3%)  nonBgBox=(0,3)-(256,202) => 256x199
+      saved C:\ai-projects\cursor-trap\probe\out\mag_C_excl_under_plain_pw.bgra (256x256)
+  === variant D_excl_desktop_showmagcursor : mode=0x1 (INCLUDE|SHOWMAGNIFIEDCURSOR) count=1
+      MagSetWindowFilterList -> 1 gle=0
+      MagGetWindowFilterList -> count=1 mode=0x1 hwnd[0]=000000000001000C
+    [scalingCB #4] variant=D_excl_desktop_showmagcursor
+        src  256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        dest 256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        unclipped=(0,0,256,256) clipped=(0,0,256,256) srcdata=00000192895B9820 destdata=00000192895754A0
+      cursor=(1130,389) MagSetWindowSource=(1002,261,1258,517) -> 1 ; MagGetWindowSource=(1002,261,1258,517)
+      cursor offset inside mag client = (128,128)
+      scalingCB invocations during this variant = 0
+      [screenBitBlt] distinctColors=1930 dominant=#171717 (29292 px = 44.7%)  nonBgBox=(0,11)-(256,256) => 256x245
+      saved C:\ai-projects\cursor-trap\probe\out\mag_D_excl_desktop_showmagcursor_screen.bgra (256x256)
+      PrintWindow(PW_RENDERFULLCONTENT) ok=1
+      [printWindow] distinctColors=95 dominant=#171717 (24388 px = 37.2%)  nonBgBox=(0,0)-(256,256) => 256x256
+      saved C:\ai-projects\cursor-trap\probe\out\mag_D_excl_desktop_showmagcursor_pw.bgra (256x256)
+  === variant E_excl_under_showmag_clip : mode=0x3 (INCLUDE|SHOWMAGNIFIEDCURSOR|CLIPAROUNDCURSOR) count=1
+      MagSetWindowFilterList -> 1 gle=0
+      MagGetWindowFilterList -> count=1 mode=0x3 hwnd[0]=0000000000090048
+    [scalingCB #5] variant=E_excl_under_showmag_clip
+        src  256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        dest 256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        unclipped=(0,0,256,256) clipped=(0,0,256,256) srcdata=00000192895B9820 destdata=00000192895754A0
+      cursor=(1010,184) MagSetWindowSource=(882,56,1138,312) -> 1 ; MagGetWindowSource=(882,56,1138,312)
+      cursor offset inside mag client = (128,128)
+      scalingCB invocations during this variant = 0
+      [screenBitBlt] distinctColors=1869 dominant=#171717 (60617 px = 92.5%)  nonBgBox=(0,0)-(256,232) => 256x232
+      saved C:\ai-projects\cursor-trap\probe\out\mag_E_excl_under_showmag_clip_screen.bgra (256x256)
+      PrintWindow(PW_RENDERFULLCONTENT) ok=1
+      [printWindow] distinctColors=55 dominant=#171717 (62273 px = 95.0%)  nonBgBox=(0,0)-(256,244) => 256x244
+      saved C:\ai-projects\cursor-trap\probe\out\mag_E_excl_under_showmag_clip_pw.bgra (256x256)
+  === variant F_incl_under : mode=0x1 (INCLUDE|SHOWMAGNIFIEDCURSOR) count=1
+      MagSetWindowFilterList -> 1 gle=0
+      MagGetWindowFilterList -> count=1 mode=0x1 hwnd[0]=0000000000090048
+    [scalingCB #6] variant=F_incl_under
+        src  256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        dest 256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        unclipped=(0,0,256,256) clipped=(0,0,256,256) srcdata=00000192895B9820 destdata=00000192895754A0
+      cursor=(963,17) MagSetWindowSource=(835,0,1091,256) -> 1 ; MagGetWindowSource=(835,0,1091,256)
+      cursor offset inside mag client = (128,17)
+      scalingCB invocations during this variant = 0
+      [screenBitBlt] distinctColors=1170 dominant=#171717 (40093 px = 61.2%)  nonBgBox=(0,0)-(256,256) => 256x256
+      saved C:\ai-projects\cursor-trap\probe\out\mag_F_incl_under_screen.bgra (256x256)
+      PrintWindow(PW_RENDERFULLCONTENT) ok=1
+      [printWindow] distinctColors=54 dominant=#171717 (45282 px = 69.1%)  nonBgBox=(0,0)-(256,256) => 256x256
+      saved C:\ai-projects\cursor-trap\probe\out\mag_F_incl_under_pw.bgra (256x256)
+  === variant G_excl_host_showmagcursor : mode=0x1 (INCLUDE|SHOWMAGNIFIEDCURSOR) count=1
+      MagSetWindowFilterList -> 1 gle=0
+      MagGetWindowFilterList -> count=1 mode=0x1 hwnd[0]=0000000000130D90
+    [scalingCB #7] variant=G_excl_host_showmagcursor
+        src  256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        dest 256x256 stride=1024 off=0 cb=262144 fmt=F5C7AD2D-6A8D-43DD-A7A8-A29935261AE9
+        unclipped=(0,0,256,256) clipped=(0,0,256,256) srcdata=00000192895B9820 destdata=00000192895754A0
+      cursor=(774,45) MagSetWindowSource=(646,0,902,256) -> 1 ; MagGetWindowSource=(646,0,902,256)
+      cursor offset inside mag client = (128,45)
+      scalingCB invocations during this variant = 0
+      [screenBitBlt] distinctColors=1265 dominant=#171717 (40205 px = 61.3%)  nonBgBox=(0,0)-(256,246) => 256x246
+      saved C:\ai-projects\cursor-trap\probe\out\mag_G_excl_host_showmagcursor_screen.bgra (256x256)
+      PrintWindow(PW_RENDERFULLCONTENT) ok=1
+      [printWindow] distinctColors=34 dominant=#171717 (45936 px = 70.1%)  nonBgBox=(0,0)-(256,256) => 256x256
+      saved C:\ai-projects\cursor-trap\probe\out\mag_G_excl_host_showmagcursor_pw.bgra (256x256)
+
+MagShowSystemCursor(FALSE) -> 1 gle=0
+MagShowSystemCursor(TRUE) -> 1 gle=0
+
+total scalingCB invocations = 7
+=== done ===

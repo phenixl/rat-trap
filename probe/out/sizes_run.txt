@@ -1,0 +1,62 @@
+=== LoadImage sizing probe ===
+HKCU CursorBaseSize / SM_CXCURSOR: 80 / 32
+
+--- C:\WINDOWS\cursors\aero_arrow.cur ---
+  cxDesired=   0 -> bitmap=128x128 hotspot=(0,0) hbmColor=yes fp96=695ADE548CB83E49
+  cxDesired=  16 -> bitmap=16x16 hotspot=(0,0) hbmColor=yes fp96=0B0B922E530C3E3D
+  cxDesired=  24 -> bitmap=24x24 hotspot=(0,0) hbmColor=yes fp96=07A2EF2D4D72C980
+  cxDesired=  32 -> bitmap=32x32 hotspot=(0,0) hbmColor=yes fp96=724E88BF14A76863
+  cxDesired=  40 -> bitmap=40x40 hotspot=(0,0) hbmColor=yes fp96=8242111F7938CBBD
+  cxDesired=  48 -> bitmap=48x48 hotspot=(0,0) hbmColor=yes fp96=3119DA45A077EA43
+  cxDesired=  64 -> bitmap=64x64 hotspot=(0,0) hbmColor=yes fp96=EE5FE5B2C71E3B6A
+        saved sz_aero_arrow.cur_64 (64x64)
+  cxDesired=  80 -> bitmap=80x80 hotspot=(0,0) hbmColor=yes fp96=D0A65D24141D30D2
+        saved sz_aero_arrow.cur_80 (80x80)
+  cxDesired=  96 -> bitmap=96x96 hotspot=(0,0) hbmColor=yes fp96=D1991BB1E8115F96
+        saved sz_aero_arrow.cur_96 (96x96)
+  cxDesired= 128 -> bitmap=128x128 hotspot=(0,0) hbmColor=yes fp96=695ADE548CB83E49
+  cxDesired= 160 -> bitmap=160x160 hotspot=(0,0) hbmColor=yes fp96=B0BFE80F97A92F53
+  cxDesired= 256 -> bitmap=256x256 hotspot=(0,0) hbmColor=yes fp96=0B57A516A1B658CA
+
+--- C:\WINDOWS\cursors\aero_link.cur ---
+  cxDesired=   0 -> bitmap=128x128 hotspot=(25,0) hbmColor=yes fp96=D299AD5C69021EFA
+  cxDesired=  16 -> bitmap=16x16 hotspot=(3,0) hbmColor=yes fp96=D80CD320BBC00253
+  cxDesired=  24 -> bitmap=24x24 hotspot=(5,0) hbmColor=yes fp96=5BCAEE3FE6874A8F
+  cxDesired=  32 -> bitmap=32x32 hotspot=(7,0) hbmColor=yes fp96=B09A67D7F635C269
+  cxDesired=  40 -> bitmap=40x40 hotspot=(8,0) hbmColor=yes fp96=90F6F9E812C3727F
+  cxDesired=  48 -> bitmap=48x48 hotspot=(9,0) hbmColor=yes fp96=D9E6731D5A746847
+  cxDesired=  64 -> bitmap=64x64 hotspot=(12,0) hbmColor=yes fp96=E95ACECA8BEDF330
+        saved sz_aero_link.cur_64 (64x64)
+  cxDesired=  80 -> bitmap=80x80 hotspot=(16,0) hbmColor=yes fp96=E3075549BEF3466E
+        saved sz_aero_link.cur_80 (80x80)
+  cxDesired=  96 -> bitmap=96x96 hotspot=(19,0) hbmColor=yes fp96=02C5B97BA14D9BDC
+        saved sz_aero_link.cur_96 (96x96)
+  cxDesired= 128 -> bitmap=128x128 hotspot=(25,0) hbmColor=yes fp96=D299AD5C69021EFA
+  cxDesired= 160 -> bitmap=160x160 hotspot=(31,0) hbmColor=yes fp96=8BDD81F2196BFA2B
+  cxDesired= 256 -> bitmap=256x256 hotspot=(50,0) hbmColor=yes fp96=00406EFCE9EA13BE
+
+--- C:\WINDOWS\cursors\aero_busy.ani ---
+  cxDesired=   0 -> bitmap=64x64 hotspot=(32,32) hbmColor=yes fp96=B1C3D72365E2B922
+  cxDesired=  16 -> bitmap=16x16 hotspot=(8,8) hbmColor=yes fp96=24A3915AB32EE4B4
+  cxDesired=  24 -> bitmap=24x24 hotspot=(12,12) hbmColor=yes fp96=669DBF5FD22B1FB9
+  cxDesired=  32 -> bitmap=32x32 hotspot=(16,16) hbmColor=yes fp96=193A32C4EE422E40
+  cxDesired=  40 -> bitmap=40x40 hotspot=(20,20) hbmColor=yes fp96=3D252B8F95F77712
+  cxDesired=  48 -> bitmap=48x48 hotspot=(24,24) hbmColor=yes fp96=659619529D2146DA
+  cxDesired=  64 -> bitmap=64x64 hotspot=(32,32) hbmColor=yes fp96=B1C3D72365E2B922
+        saved sz_aero_busy.ani_64 (64x64)
+  cxDesired=  80 -> bitmap=80x80 hotspot=(40,40) hbmColor=yes fp96=8202228DEF17598F
+        saved sz_aero_busy.ani_80 (80x80)
+  cxDesired=  96 -> bitmap=96x96 hotspot=(48,48) hbmColor=yes fp96=61AE80C6DF391057
+        saved sz_aero_busy.ani_96 (96x96)
+  cxDesired= 128 -> bitmap=128x128 hotspot=(64,64) hbmColor=yes fp96=C032F007CC01ECE0
+  cxDesired= 160 -> bitmap=160x160 hotspot=(80,80) hbmColor=yes fp96=9FB919C315FAAB9E
+  cxDesired= 256 -> bitmap=256x256 hotspot=(128,128) hbmColor=yes fp96=05133C269FB50DF7
+
+=== animated cursor: does GetIconInfo follow the animation? ===
+  C:\WINDOWS\cursors\aero_busy.ani : sampling GetIconInfo every 60 ms
+    [ 0] fp=40487C7C94353E49
+    samples=25 frameChanges=0 => GetIconInfo returns a STATIC frame
+  C:\WINDOWS\cursors\aero_working.ani : sampling GetIconInfo every 60 ms
+    [ 0] fp=105D5EF1D3C9568D
+    samples=25 frameChanges=0 => GetIconInfo returns a STATIC frame
+=== done ===

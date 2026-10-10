@@ -1,0 +1,30 @@
+=== MagProbe2: MS_* as WINDOW STYLES ===
+MagInitialize -> 1
+monitor=(770,1440)-(2690,2520) cursor=(2133,1930) source=(2037,1834,2229,2026) host at (770,1440)
+magA=0000000000260A62 magB=00000000001F05E8 magC=0000000000140A50 err=6
+  style[A]=0x50000000 SHOWMAGNIFIEDCURSOR(0x1)=0 CLIPAROUNDCURSOR(0x2)=0 INVERTCOLORS(0x4)=0
+  style[B]=0x50000001 SHOWMAGNIFIEDCURSOR(0x1)=1 CLIPAROUNDCURSOR(0x2)=0 INVERTCOLORS(0x4)=0
+  style[C]=0x50000003 SHOWMAGNIFIEDCURSOR(0x1)=1 CLIPAROUNDCURSOR(0x2)=1 INVERTCOLORS(0x4)=0
+MagSetImageScalingCallback(B) -> 1
+excluding 2 top-level windows
+   excl[0]=00000000000A0EAC
+   excl[1]=0000000000010208
+  MagSetWindowSource(0000000000260A62) -> 1
+  MagSetWindowFilterList(0000000000260A62, EXCLUDE, 2) -> 1
+  MagSetWindowSource(00000000001F05E8) -> 1
+  MagSetWindowFilterList(00000000001F05E8, EXCLUDE, 2) -> 1
+  MagSetWindowSource(0000000000140A50) -> 1
+  MagSetWindowFilterList(0000000000140A50, EXCLUDE, 2) -> 1
+scalingCB during pump = 0
+    saved C:\ai-projects\cursor-trap\probe\out\mag2_full.bgra (592x192)
+    saved C:\ai-projects\cursor-trap\probe\out\mag2_A_plain.bgra (192x192)
+    saved C:\ai-projects\cursor-trap\probe\out\mag2_B_showcursor.bgra (192x192)
+    saved C:\ai-projects\cursor-trap\probe\out\mag2_C_showcursor_clip.bgra (192x192)
+    [A plain] distinctColors=1 dominant=#F0F0F0 36864 px (100.0%)
+    [B showcursor] distinctColors=215 dominant=#151517 21822 px (59.2%)
+    [C showcursor+clip] distinctColors=1 dominant=#F0F0F0 36864 px (100.0%)
+  B-vs-A diff pixels=36864 bbox=(0,0)-(192,192) => 192x192
+  C-vs-A diff pixels=0 bbox=<none>
+cursor pos=(2133,1930) expected cursor origin in tile=(96,96)
+total scalingCB = 0
+=== done ===

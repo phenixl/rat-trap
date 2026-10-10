@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <RootNamespace>RatTrap</RootNamespace>
+    <AssemblyName>rattrap</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>x64</Platforms>
+    <!-- Keep the output path identical whether the build is driven through the .sln (which
+         supplies Platform=x64) or the project directly. Without this, one path gains an "x64"
+         segment and the other does not, which makes scripts and documentation fragile. -->
+    <AppendPlatformToOutputPath>false</AppendPlatformToOutputPath>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+
+    <!-- Native AOT: ship a single self-contained native exe, no runtime install needed. -->
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <!--
+      We use ONLY source-generated interop:
+        * [LibraryImport]          for Win32 flat API  (P/Invoke source generator)
+        * [GeneratedComInterface]  for DXGI/D3D11 COM (COM interface source generator)
+      Built-in COM interop and reflection-driven marshalling are unavailable under AOT,
+      so keep this off and never introduce [ComImport] or [DllImport] with runtime
+      marshalling of non-blittable types.
+    -->
+    <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyTitle>rat-trap</AssemblyTitle>
+    <Product>rat-trap</Product>
+    <Description>Recover cursor bitmaps (with alpha) from continuous screen capture.</Description>
+    <Version>0.1.0</Version>
+
+    <!--
+      InvariantGlobalization=true comes from Directory.Build.props; no ICU payload.
+    -->
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <StackTraceSupport>false</StackTraceSupport>
+    <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
+  </PropertyGroup>
+
+</Project>
+

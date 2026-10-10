@@ -1,0 +1,32 @@
+<Project>
+
+  <!--
+    rat-trap — repository-wide build settings.
+
+    These settings exist for two hard reasons discovered while building this repo
+    on the target machine:
+
+    1. The Roslyn compiler server (VBCSCompiler) and MSBuild's ToolTask both talk to
+       child processes over NAMED PIPES. Any sandbox that forbids named pipes makes
+       `dotnet build` fail with an UnauthorizedAccessException thrown from
+       Microsoft.CSharp.Core.targets (the Csc task) - it is NOT a file-permission
+       problem. UseSharedCompilation=false keeps compilation in-process.
+    2. The machine has no working TLS egress to nuget.org, so restore must be able to
+       succeed from the local package cache alone (see nuget.config). We therefore
+       keep the dependency count at ZERO.
+
+    Do not remove these without re-checking both conditions.
+  -->
+  <PropertyGroup>
+    <UseSharedCompilation>false</UseSharedCompilation>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+    <NuGetAudit>false</NuGetAudit>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+</Project>

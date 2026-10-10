@@ -1,0 +1,50 @@
+=== MagProbe3: isolate the system-rendered cursor by style-bit diff ===
+MagInitialize -> 1
+cursor at (2646,678) flags=0x1
+
+--- cursor identity fingerprint ---
+  live cursor hotspot=(7,0) fingerprint=230BB26755406F37
+    saved id_live_32 (32x32)
+  Arrow        hs=(0,0) fp=E6CE6EECD10DF2C8   C:\WINDOWS\cursors\aero_arrow.cur
+  Help         hs=(0,0) fp=BBF233DF57F243CF   C:\WINDOWS\cursors\aero_helpsel.cur
+  AppStarting  hs=(0,8) fp=105D5EF1D3C9568D   C:\WINDOWS\cursors\aero_working.ani
+  Wait         hs=(16,16) fp=40487C7C94353E49   C:\WINDOWS\cursors\aero_busy.ani
+  NWPen        hs=(0,0) fp=588EDA638FECCCC1   C:\WINDOWS\cursors\aero_pen.cur
+  No           hs=(8,8) fp=71CF9497087CF2D1   C:\WINDOWS\cursors\aero_unavail.cur
+  SizeNS       hs=(5,11) fp=811EC1AB6A2DEF25   C:\WINDOWS\cursors\aero_ns.cur
+  SizeWE       hs=(12,5) fp=B3CC81527AC0BACA   C:\WINDOWS\cursors\aero_ew.cur
+  SizeNWSE     hs=(8,8) fp=490E4EE86C539D43   C:\WINDOWS\cursors\aero_nwse.cur
+  SizeNESW     hs=(9,8) fp=DAEE7F483A5872C0   C:\WINDOWS\cursors\aero_nesw.cur
+  SizeAll      hs=(11,11) fp=C9A1F254F5A751A9   C:\WINDOWS\cursors\aero_move.cur
+  UpArrow      hs=(5,0) fp=445059295BAD6115   C:\WINDOWS\cursors\aero_up.cur
+  Hand         hs=(7,0) fp=230BB26755406F37   <== MATCH  C:\WINDOWS\cursors\aero_link.cur
+  Pin          hs=(8,0) fp=A02EAEA24610A060   C:\Users\lphen\AppData\Local\Microsoft\Windows\Cursors\pin_eoa.cur
+  Person       hs=(7,0) fp=323AEF6E97576ABE   C:\Users\lphen\AppData\Local\Microsoft\Windows\Cursors\person_eoa.cur
+monitor=(0,0)-(2752,1152) dpi=96x96
+source=(2550,582,2742,774) host=(0,0) size=592x192
+host=00000000001412D2 A=0000000000150D90 B=0000000000270A62 C=0000000000370A76
+  MagSetWindowSource(0000000000150D90) -> 1 gle=6
+  MagSetWindowSource(0000000000270A62) -> 1 gle=6
+  MagSetWindowSource(0000000000370A76) -> 1 gle=6
+    saved mag3_pass0 (592x192)
+    saved mag3_A_plain (192x192)
+    saved mag3_B_show (192x192)
+    saved mag3_C_showclip (192x192)
+  [pass0] B vs A: diffPixels=2304 SAD=214308 bbox=(39,0)-(51,192) => 12x192
+    saved patch_B_x31_y0 (28x192)
+      patch origin in tile=(31,0) size=28x192  (cursor origin expected at (96,96))
+  [pass0] C vs A: diffPixels=2304 SAD=183685 bbox=(89,0)-(101,192) => 12x192
+    saved patch_C_x81_y0 (28x192)
+      patch origin in tile=(81,0) size=28x192  (cursor origin expected at (96,96))
+  [pass0] A bg sample=(240,240,240) B same=(240,240,240)
+    saved mag3_pass1 (592x192)
+  [pass1] B vs A: diffPixels=2304 SAD=214308 bbox=(39,0)-(51,192) => 12x192
+  [pass1] C vs A: diffPixels=2304 SAD=183685 bbox=(89,0)-(101,192) => 12x192
+    saved mag3_pass2 (592x192)
+  [pass2] B vs A: diffPixels=2304 SAD=214308 bbox=(39,0)-(51,192) => 12x192
+  [pass2] C vs A: diffPixels=2304 SAD=183685 bbox=(89,0)-(101,192) => 12x192
+
+MagShowSystemCursor(FALSE) -> 1
+    saved mag3_after_hide (592x192)
+MagShowSystemCursor(TRUE) -> 1
+=== done ===
