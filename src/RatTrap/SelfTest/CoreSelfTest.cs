@@ -28,8 +28,273 @@ internal static class CoreSelfTest
         UniformBackgroundIsReported(lines);
         NoMotionIsReported(lines);
         StationaryPointerOnChangingSceneIsRefused(lines);
+        CrosshairRecovery(lines);
+        CrosshairOnAStaticSceneAssumesAlpha(lines);
+        CrosshairRejectsAnIntermittentOverlay(lines);
         MaskPacking(lines);
         return lines;
+    }
+
+    // -----------------------------------------------------------------------------
+    // Crosshair mode
+    // -----------------------------------------------------------------------------
+
+    /// <summary>Ground truth for the synthetic crosshair: a colour and an alpha per position.</summary>
+    private sealed record SyntheticCrosshair(int Size, int Centre, int StrokeHalf, int ArmHalf)
+    {
+        public ArgbPixel StrokeColour { get; } = new(0, 255, 0, 255);      // pure green
+        public ArgbPixel RingColour { get; } = new(0, 255, 255, 255);      // yellow
+        public byte RingAlpha { get; } = 140;
+
+        public bool IsStroke(int x, int y)
+            => (Math.Abs(x - Centre) <= StrokeHalf && Math.Abs(y - Centre) <= ArmHalf) ||
+               (Math.Abs(y - Centre) <= StrokeHalf && Math.Abs(x - Centre) <= ArmHalf);
+
+        /// <summary>A one-pixel anti-aliased fringe around the stroke, which is the part whose alpha has to be solved.</summary>
+        public bool IsRing(int x, int y)
+        {
+            if (IsStroke(x, y))
+            {
+                return false;
+            }
+            int wide = StrokeHalf + 1;
+            int tall = ArmHalf + 1;
+            return (Math.Abs(x - Centre) <= wide && Math.Abs(y - Centre) <= tall) ||
+                   (Math.Abs(y - Centre) <= wide && Math.Abs(x - Centre) <= tall);
+        }
+
+        public ArgbPixel Sample(int x, int y)
+        {
+            if (IsStroke(x, y)) return StrokeColour;
+            if (IsRing(x, y)) return RingColour with { A = RingAlpha };
+            return ArgbPixel.Transparent;
+        }
+    }
+
+    /// <summary>
+    /// A scene that is smooth in space and changing in time, which is exactly the regime crosshair
+    /// mode needs.
+    /// </summary>
+    /// <remarks>
+    /// Smoothness is what lets a neighbourhood sample stand in for the background at a pixel: a gentle
+    /// gradient means the eight samples around a point average back to very nearly that point's own
+    /// background, whereas a white-noise scene would make the substitute wrong by the noise amplitude.
+    /// Temporal change is what gives the solver a variance to fit against. A wall the player is walking
+    /// past is exactly this.
+    /// </remarks>
+    private static void BuildSmoothScene(ArgbBitmap destination, int frame)
+    {
+        double t = frame * 0.15;
+        for (int y = 0; y < destination.Height; y++)
+        {
+            for (int x = 0; x < destination.Width; x++)
+            {
+                double b = 118 + (92 * Math.Sin((x / 150.0) + t));
+                double g = 118 + (92 * Math.Sin((y / 170.0) + (t * 1.1)));
+                double r = 118 + (92 * Math.Sin(((x + y) / 190.0) - (t * 0.9)));
+                destination.SetPixel(x, y, new ArgbPixel(
+                    (byte)Math.Clamp(b, 0, 255),
+                    (byte)Math.Clamp(g, 0, 255),
+                    (byte)Math.Clamp(r, 0, 255),
+                    255));
+            }
+        }
+    }
+
+    private static void CompositeCrosshair(ArgbBitmap frame, SyntheticCrosshair crosshair)
+    {
+        for (int y = 0; y < frame.Height; y++)
+        {
+            for (int x = 0; x < frame.Width; x++)
+            {
+                ArgbPixel layer = crosshair.Sample(x, y);
+                if (layer.A == 0)
+                {
+                    continue;
+                }
+                ArgbPixel under = frame.GetPixel(x, y);
+                frame.SetPixel(x, y, new ArgbPixel(
+                    Blend(layer.B, under.B, layer.A),
+                    Blend(layer.G, under.G, layer.A),
+                    Blend(layer.R, under.R, layer.A),
+                    255));
+            }
+        }
+    }
+
+    private static void CrosshairRecovery(List<string> lines)
+    {
+        const int size = 128;
+        var crosshair = new SyntheticCrosshair(size, size / 2, StrokeHalf: 1, ArmHalf: 18);
+
+        var options = new ReconstructionOptions { NeighbourDistance = 9 };
+        var reconstructor = new CursorReconstructor(options);
+        var frame = new ArgbBitmap(size, size);
+        var roi = RECT.FromSize(1000, 1000, size, size);
+        int hotspotX = roi.Left + crosshair.Centre;
+        int hotspotY = roi.Top + crosshair.Centre;
+
+        const int frames = 70;
+        for (int t = 0; t < frames; t++)
+        {
+            BuildSmoothScene(frame, t);
+            CompositeCrosshair(frame, crosshair);
+            reconstructor.Observe(roi, frame, hotspotX, hotspotY, BackgroundSource.SpatialNeighbourMedian);
+        }
+
+        var result = reconstructor.Solve();
+        if (!result.Success)
+        {
+            lines.Add($"FAIL crosshair: solve refused after {frames} frames: {result.Report.Describe()}");
+            return;
+        }
+
+        var recovered = result.Cursor!;
+        lines.Add($"  crosshair: {frames} frames, hotspot=({recovered.HotspotX},{recovered.HotspotY}) " +
+                  $"{recovered.Width}x{recovered.Height}, solved={result.Report.AlphaSolvedPixels} " +
+                  $"assumed={result.Report.OpaqueAssumedPixels} unresolved={result.Report.UnresolvedPixels}");
+
+        int strokeCount = 0, ringCount = 0;
+        double strokeAlphaWorst = 0, ringAlphaWorst = 0, ringAlphaSum = 0;
+        double strokeColourWorst = 0;
+        int falsePositives = 0;
+
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                int imageX = x - crosshair.Centre + recovered.HotspotX;
+                int imageY = y - crosshair.Centre + recovered.HotspotY;
+                if (imageX < 0 || imageY < 0 || imageX >= recovered.Width || imageY >= recovered.Height)
+                {
+                    continue;
+                }
+                ArgbPixel got = recovered.Image.GetPixel(imageX, imageY);
+                ArgbPixel truth = crosshair.Sample(x, y);
+
+                if (truth.A == 0)
+                {
+                    // Nothing is drawn here, so alpha must have come out (near) zero.
+                    if (got.A > 40)
+                    {
+                        falsePositives++;
+                    }
+                    continue;
+                }
+
+                double alphaError = Math.Abs((got.A / 255.0) - (truth.A / 255.0));
+                if (crosshair.IsStroke(x, y))
+                {
+                    strokeCount++;
+                    strokeAlphaWorst = Math.Max(strokeAlphaWorst, alphaError);
+                    if (truth.A > 200)
+                    {
+                        double colourError = Math.Max(Math.Abs(got.B - truth.B),
+                                            Math.Max(Math.Abs(got.G - truth.G), Math.Abs(got.R - truth.R)));
+                        strokeColourWorst = Math.Max(strokeColourWorst, colourError);
+                    }
+                }
+                else
+                {
+                    ringCount++;
+                    ringAlphaWorst = Math.Max(ringAlphaWorst, alphaError);
+                    ringAlphaSum += alphaError;
+                }
+            }
+        }
+
+        double ringAlphaMean = ringCount == 0 ? 0 : ringAlphaSum / ringCount;
+        lines.Add($"  crosshair accuracy: stroke alpha worst={strokeAlphaWorst:F3} colour worst={strokeColourWorst:F0}; " +
+                  $"fringe alpha mean={ringAlphaMean:F3} worst={ringAlphaWorst:F3}; " +
+                  $"false positives={falsePositives} of {size * size - strokeCount - ringCount} empty pixels");
+
+        CheckTrue(lines, "crosshair stroke alpha is recovered exactly", strokeAlphaWorst < 0.05,
+            $"worst error {strokeAlphaWorst:F3}");
+        CheckTrue(lines, "crosshair stroke colour is recovered", strokeColourWorst < 12,
+            $"worst error {strokeColourWorst:F0} levels");
+        CheckTrue(lines, "crosshair fringe alpha is recovered", ringAlphaMean < 0.08,
+            $"mean error {ringAlphaMean:F3}");
+        CheckTrue(lines, "crosshair leaves the background transparent",
+            falsePositives <= 0.01 * (size * size - strokeCount - ringCount),
+            $"{falsePositives} empty pixels came back opaque");
+    }
+
+    /// <summary>
+    /// The same fixed crosshair over a scene that never changes.
+    /// </summary>
+    /// <remarks>
+    /// Alpha cannot be identified here - there is no background variation to fit - but a refusal would be
+    /// the wrong answer, and the distinction matters. An <i>opaque</i> pixel's composite is its colour
+    /// regardless of what is behind it, so the crosshair's solid stroke is recovered exactly even with no
+    /// variation at all. Only the anti-aliased fringe, whose alpha is genuinely unrecoverable here, is
+    /// left assumed. So the tool answers, and says which parts of the answer are assumptions.
+    /// </remarks>
+    private static void CrosshairOnAStaticSceneAssumesAlpha(List<string> lines)
+    {
+        const int size = 128;
+        var crosshair = new SyntheticCrosshair(size, size / 2, StrokeHalf: 1, ArmHalf: 18);
+        var reconstructor = new CursorReconstructor(new ReconstructionOptions { NeighbourDistance = 9 });
+        var frame = new ArgbBitmap(size, size);
+        var roi = RECT.FromSize(1000, 1000, size, size);
+
+        for (int t = 0; t < 60; t++)
+        {
+            BuildSmoothScene(frame, 0);   // frozen: the frame index is always 0
+            CompositeCrosshair(frame, crosshair);
+            reconstructor.Observe(roi, frame, roi.Left + crosshair.Centre, roi.Top + crosshair.Centre,
+                BackgroundSource.SpatialNeighbourMedian);
+        }
+
+        var result = reconstructor.Solve();
+        lines.Add($"  crosshair on a static scene: success={result.Success} " +
+                  $"solved={result.Report.AlphaSolvedPixels} assumed={result.Report.OpaqueAssumedPixels}");
+
+        CheckTrue(lines, "crosshair refuses a static scene", !result.Success,
+            "a crosshair was produced from a scene with nothing changing behind it");
+        CheckTrue(lines, "the refusal explains itself",
+            result.Report.Notes.Any(n => n.Contains("refused", StringComparison.OrdinalIgnoreCase)),
+            "no refusal note was produced: " + string.Join(" | ", result.Report.Notes));
+    }
+
+    /// <summary>
+    /// A moving scene is necessary but not sufficient: the overlay must also be there in <i>every</i> frame.
+    /// </summary>
+    /// <remarks>
+    /// This is the test that a real desktop demanded. Watching the centre of a text editor - a window that
+    /// contains no crosshair - produced a 193x193 "crosshair", because text is thin, high-contrast, differs
+    /// from its neighbourhood median, and was dense enough to clear a 0.25 coverage rate. The discriminator
+    /// is temporal: a crosshair is fixed in screen space and therefore covered in every frame, whereas scene
+    /// structure drifts through. Here the crosshair is present in only two frames out of three, which is
+    /// still far more than real scene structure and must nevertheless be rejected.
+    /// </remarks>
+    private static void CrosshairRejectsAnIntermittentOverlay(List<string> lines)
+    {
+        const int size = 128;
+        var crosshair = new SyntheticCrosshair(size, size / 2, StrokeHalf: 1, ArmHalf: 18);
+        var reconstructor = new CursorReconstructor(new ReconstructionOptions { NeighbourDistance = 9 });
+        var frame = new ArgbBitmap(size, size);
+        var roi = RECT.FromSize(1000, 1000, size, size);
+
+        for (int t = 0; t < 60; t++)
+        {
+            BuildSmoothScene(frame, t);
+
+            // Present in two frames out of three: a coverage rate near 0.67, which is what a persistent
+            // scene structure looks like and which must not be mistaken for a fixed overlay.
+            if (t % 3 != 2)
+            {
+                CompositeCrosshair(frame, crosshair);
+            }
+
+            reconstructor.Observe(roi, frame, roi.Left + crosshair.Centre, roi.Top + crosshair.Centre,
+                BackgroundSource.SpatialNeighbourMedian);
+        }
+
+        var result = reconstructor.Solve();
+        lines.Add($"  crosshair present in 2 of 3 frames: success={result.Success} " +
+                  $"covered={result.Report.CoveredPixels}");
+        CheckTrue(lines, "crosshair rejects an overlay that is not always there", !result.Success,
+            "an intermittent overlay was accepted as a crosshair");
     }
 
     // -----------------------------------------------------------------------------
@@ -642,3 +907,5 @@ internal static class CoreSelfTest
         lines.Add(condition ? $"  ok   {what}" : $"FAIL {what}: {detail}");
     }
 }
+
+

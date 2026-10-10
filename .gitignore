@@ -40,3 +40,6 @@ probe/build/
 
 # Transient output
 *.log
+
+_*
+

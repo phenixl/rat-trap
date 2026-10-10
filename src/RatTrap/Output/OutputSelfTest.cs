@@ -51,9 +51,11 @@ internal static partial class OutputSelfTest
     public static IReadOnlyList<string> Run()
     {
         var lines = new List<string>();
-        string tempDirectory = Path.Combine(
-            Path.GetTempPath(),
-            "rattrap-output-selftest-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        // %TEMP% is not a safe assumption. Under a confined environment a child process can be refused
+        // writes there while the program's own directory is writable, and the whole suite would then
+        // fail for a reason that has nothing to do with the code under test. Probe the candidates in
+        // order and report which one was used.
+        string tempDirectory = ResolveScratchDirectory(lines);
 
         try
         {
@@ -1876,6 +1878,49 @@ internal static partial class OutputSelfTest
         return mismatches == 0;
     }
 
+    /// <summary>
+    /// Picks the first writable directory for the checks that need real files on disk.
+    /// </summary>
+    /// <remarks>
+    /// Tries the process temp directory, then the program directory, then the current directory. The
+    /// order is by least surprise - scratch files belong in %TEMP% - and the other two are fallbacks for
+    /// environments that deny it, which this project has already met. Whichever is chosen gets a line in
+    /// the report, so a run under an unusual policy is diagnosable rather than mysterious.
+    /// </remarks>
+    private static string ResolveScratchDirectory(List<string> lines)
+    {
+        string leaf = "rattrap-output-selftest-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+        string[] candidates =
+        [
+            Path.Combine(Path.GetTempPath(), leaf),
+            Path.Combine(AppContext.BaseDirectory, leaf),
+            Path.Combine(Directory.GetCurrentDirectory(), leaf),
+        ];
+
+        var problems = new List<string>();
+        foreach (string candidate in candidates)
+        {
+            try
+            {
+                Directory.CreateDirectory(candidate);
+                // Creating the directory is not enough: some policies allow that and refuse the write.
+                string probe = Path.Combine(candidate, "write-probe");
+                File.WriteAllText(probe, "ok");
+                File.Delete(probe);
+                lines.Add("INFO scratch-directory: " + candidate);
+                return candidate;
+            }
+            catch (Exception ex)
+            {
+                problems.Add(candidate + " (" + ex.GetType().Name + ")");
+            }
+        }
+
+        lines.Add("INFO scratch-directory: NONE WRITABLE - " + string.Join("; ", problems));
+        lines.Add("FAIL scratch-directory: no writable directory for the file-based checks. The checks that " +
+                  "need only byte arrays still ran; nothing that has to load a file back through Windows did.");
+        return Path.Combine(Path.GetTempPath(), leaf);
+    }
     private static void AssertThrows<TException>(Action action, string what)
         where TException : Exception
     {
@@ -1960,3 +2005,4 @@ internal static partial class OutputSelfTest
         internal static partial int DeleteObject(IntPtr ho);
     }
 }
+

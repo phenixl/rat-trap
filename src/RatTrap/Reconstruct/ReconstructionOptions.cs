@@ -3,6 +3,36 @@ using RatTrap.Interop;
 
 namespace RatTrap.Reconstruct;
 
+/// <summary>Where the background for each observation comes from.</summary>
+public enum BackgroundSource
+{
+    /// <summary>
+    /// The median of recent observations of the same screen pixel. Correct whenever the cursor moves:
+    /// it covers any given pixel only part of the time, so the majority of the window is genuine
+    /// background. This is what cursor tracking uses.
+    /// </summary>
+    TemporalMedian = 0,
+
+    /// <summary>
+    /// The median of the pixel's immediate neighbourhood <i>in the same frame</i>.
+    /// </summary>
+    /// <remarks>
+    /// Required for a crosshair, and the reason is structural rather than a preference. A crosshair
+    /// does not move: it sits at a fixed screen position while the scene moves behind it. So the
+    /// pixels it covers are covered in <i>every</i> frame, the temporal window fills entirely with
+    /// composite values, and the median of that window is the composite - the background model has
+    /// adopted the very thing it was supposed to see through, which is the failure described in
+    /// docs/algorithm.md section 5.1 arriving by a different route.
+    /// <para>
+    /// A neighbourhood sample works instead because a crosshair is thin: a few pixels away from any
+    /// point on its stroke there is ordinary scene. Sampling in eight directions and taking the median
+    /// is enough, because from most points on a stroke most of those directions leave it - for a pixel
+    /// on a horizontal arm, the two samples along the arm land on it and the other six do not.
+    /// </para>
+    /// </remarks>
+    SpatialNeighbourMedian = 1,
+}
+
 /// <summary>Tuning for <see cref="CursorReconstructor"/>.</summary>
 public sealed record ReconstructionOptions
 {
@@ -38,6 +68,17 @@ public sealed record ReconstructionOptions
 
     /// <summary>Minimum samples in the window before a background estimate is used at all.</summary>
     public int MinBackgroundSamples { get; init; } = 5;
+
+    /// <summary>
+    /// Distance, in pixels, at which <see cref="BackgroundSource.SpatialNeighbourMedian"/> samples
+    /// the surrounding scene.
+    /// </summary>
+    /// <remarks>
+    /// Must exceed the stroke width of whatever is being recovered, otherwise the "background"
+    /// samples land on the crosshair itself and the whole premise collapses. Nine pixels clears any
+    /// ordinary crosshair; a thicker one needs a larger value, which is why it is a setting.
+    /// </remarks>
+    public int NeighbourDistance { get; init; } = 9;
 
     /// <summary>
     /// Fraction of the window that must sit within <see cref="ForegroundGate"/> of the median for
@@ -83,6 +124,47 @@ public sealed record ReconstructionOptions
     /// </para>
     /// </remarks>
     public double MinCoverageRate { get; init; } = 0.25;
+
+    /// <summary>
+    /// Coverage rate required in <see cref="BackgroundSource.SpatialNeighbourMedian"/> mode, where
+    /// <see cref="MinCoverageRate"/> is far too permissive.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// In spatial mode the neighbourhood background is a poor estimate wherever the scene has structure of
+    /// its own, and thin high-contrast scene structure - text, UI edges, foliage - looks exactly like a
+    /// thin overlay: it differs from its neighbourhood median, so every such pixel is read as coverage. The
+    /// distinction that actually separates them is temporal. A crosshair is fixed in screen space and
+    /// therefore present in <b>every</b> frame; scene structure is present in some frames and not others.
+    /// </para>
+    /// <para>
+    /// Measured: watching the centre of a text editor produced a 193x193 "crosshair" under a 0.25
+    /// threshold, on a window that contains no crosshair at all. Its pixels were covered often - text is
+    /// dense - but not always.
+    /// </para>
+    /// </remarks>
+    public double MinSpatialCoverageRate { get; init; } = 0.85;
+
+    /// <summary>
+    /// Fraction of the covered pixels whose alpha must have been identified for a crosshair to be
+    /// accepted.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The requirement is that the scene varied <b>under the structure itself</b>, not merely somewhere in
+    /// the watched square. A single animating pixel is enough to make "did anything get solved?" true, and
+    /// static scene structure - a wall of text being the case that was actually measured - passes all of
+    /// the other tests: it is thin, it differs from its neighbourhood, and it is present in every frame.
+    /// What it does not have is a varying background underneath it, so almost all of its pixels come back as
+    /// assumed-opaque rather than solved.
+    /// </para>
+    /// <para>
+    /// A real crosshair over a moving scene is the opposite: the scene moves beneath every one of its
+    /// pixels, so nearly all of them are solved. Measured on synthetic ground truth: 365 of 365 covered
+    /// pixels solved, against a static-text region where only a small minority were.
+    /// </para>
+    /// </remarks>
+    public double MinSpatialSolvedFraction { get; init; } = 0.5;
 
     /// <summary>
     /// Minimum pairs before a cursor-local offset is treated as part of the cursor at all.
@@ -166,6 +248,17 @@ public readonly record struct PixelModel(
     ArgbPixel Colour,
     double Confidence)
 {
+    /// <summary>
+    /// RMS residual of the affine fit, in 8-bit levels. NaN where no fit was performed.
+    /// </summary>
+    /// <remarks>
+    /// Carried out of the fit because it is the only quantity that says whether the model actually held.
+    /// Alpha and colour can both look plausible from a fit that did not, and separating a thin fixed
+    /// overlay from thin moving scene structure comes down to exactly this: the affine relation holds for
+    /// the former and breaks for the latter.
+    /// </remarks>
+    public double ResidualRms { get; init; } = double.NaN;
+
     public static readonly PixelModel Transparent = new(PixelModelKind.Transparent, 0, ArgbPixel.Transparent, 1.0);
 }
 
@@ -268,4 +361,7 @@ public sealed record ReconstructionResult(CursorImage? Cursor, ReconstructionRep
         return builder.ToString();
     }
 }
+
+
+
 

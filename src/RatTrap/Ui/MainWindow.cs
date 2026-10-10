@@ -1,12 +1,10 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
 using RatTrap.Capture;
 using RatTrap.Imaging;
 using RatTrap.Interop;
 using RatTrap.Output;
-using RatTrap.Pointer;
-using RatTrap.Reconstruct;
+using RatTrap.Settings;
 
 namespace RatTrap.Ui;
 
@@ -15,75 +13,75 @@ namespace RatTrap.Ui;
 /// </summary>
 /// <remarks>
 /// <para>
-/// There is no framework here on purpose. WinForms and WPF are not supported by Native AOT, and
-/// Avalonia would mean a NuGet dependency, which this machine cannot restore. Standard Win32
-/// controls (<c>BUTTON</c>, <c>EDIT</c>) are drawn by the operating system and cost nothing, and the
+/// There is no UI framework here on purpose. WinForms and WPF are not supported by Native AOT, and
+/// Avalonia would mean a NuGet dependency this machine cannot restore. Standard Win32 controls
+/// (<c>BUTTON</c>, <c>EDIT</c>, <c>STATIC</c>) are drawn by the operating system and cost nothing, and the
 /// only custom drawing is the preview, which is a DIB blit.
 /// </para>
 /// <para>
-/// The window owns exactly one capture session, driven from a <c>WM_TIMER</c> tick on the UI
-/// thread. A tick does at most one rectangle read plus, in reconstruction mode, a bounded number of
-/// per-pixel updates, so the message loop stays responsive without threads. That matters because
-/// everything here touches single-threaded COM (the duplicate device) and single-threaded Win32
-/// (the GDI capture target).
+/// The window owns the message loop, the controls and the painting. Everything about acquiring a cursor
+/// lives in <see cref="CaptureSession"/>, driven one step per <c>WM_TIMER</c> tick on this thread: the
+/// capture source holds a single-threaded COM session and a GDI device context, and the solver touches a
+/// large per-pixel accumulator, none of which is safe to share.
 /// </para>
 /// <para>
 /// State lives in static fields rather than in a per-window object because a
 /// <c>[UnmanagedCallersOnly]</c> window procedure cannot capture an instance. There is exactly one
-/// window, and the fields are only touched from that window's thread.
+/// window, and the fields are only touched from its thread.
 /// </para>
 /// </remarks>
 internal static class MainWindow
 {
-    private const int IdStart = 1001;
-    private const int IdStop = 1002;
-    private const int IdExportPng = 1003;
-    private const int IdExportCur = 1004;
-    private const int IdExportAni = 1005;
-    private const int IdExportAll = 1006;
-    private const int IdSelfTest = 1007;
-    private const int IdLog = 1100;
-    private const uint TimerId = 1;
+    // Control identifiers.
+    private const int IdModeGroup = 1200;
+    private const int IdModeCursor = 1201;
+    private const int IdModeCrosshair = 1202;
+    private const int IdToggle = 1210;
+    private const int IdBrowse = 1211;
+    private const int IdSelfTest = 1212;
+    private const int IdLog = 1220;
+    private const int IdSaveDir = 1230;
+    private const int IdHotKeyInfo = 1231;
+
+    private const uint CaptureTimerId = 1;
+    private const uint SelfCheckTimerId = 2;
+    private const int HotKeyId = 0x5254; // 'RT'
     private const int TimerIntervalMs = 100;
+
+    // Edit control messages. Appending through them, rather than replacing the whole contents, is what
+    // keeps the newest line visible; see AppendLog.
+    private const uint EM_SETSEL = 0x00B1;
+    private const uint EM_REPLACESEL = 0x00C2;
+    private const uint EM_SCROLLCARET = 0x00B7;
+    private const uint BM_SETCHECK = 0x00F1;
+    private const uint BST_CHECKED = 1;
+    private const uint BS_AUTORADIOBUTTON = 0x00000009;
+    private const uint BS_GROUPBOX = 0x00000007;
+    private const uint WS_GROUP = 0x00020000;
 
     // --- window state -------------------------------------------------------------
     private static IntPtr _frame;
     private static IntPtr _canvas;
     private static IntPtr _log;
     private static IntPtr _font;
-    private static bool _running;
-    private static bool _sessionFailed;
+    private static IntPtr _icon;
 
-    // --- capture session ----------------------------------------------------------
-    private static MonitorDescriptor? _monitor;
-    private static ICaptureSource? _source;
-    private static IPointerShapeProvider? _shapeProvider;
-    private static CursorReconstructor? _reconstructor;
-    private static ArgbBitmap? _roi;
-    private static RECT _roiRect;
+    private static AppSettings _settings = new();
+    private static CaptureSession? _session;
+    private static bool _hotKeyRegistered;
+    /// <summary>Set once and never cleared, so the self-check report does not read a value that Shutdown has just reset.</summary>
+    private static bool _hotKeyEverRegistered;
+    private static bool _sessionFailed;
+    private static int _paintCount;
+    private static int _timerCount;
+    private static int _nativeExceptionCount;
 
     private static CursorImage? _cursor;
     private static ArgbBitmap? _preview;
-    private static ulong _lastShapeHash;
-    private static CaptureMode _mode;
-    private static int _ticksSinceStart;
-
-    /// <summary>Which acquisition strategy the session has settled on.</summary>
-    private enum CaptureMode
-    {
-        /// <summary>Asking the compositor, which is exact; gives up after a couple of seconds.</summary>
-        WaitingForCompositor,
-        /// <summary>The compositor is drawing the cursor and hands over its bitmap.</summary>
-        Compositor,
-        /// <summary>An application is drawing its own cursor, so the solver is used.</summary>
-        Reconstructing,
-    }
-
-    private static string _status = "Press Start to capture the cursor.";
+    private static string _status = "Press Start, or press the hot key, to capture.";
     private static string _detail = string.Empty;
-    private static readonly StringBuilder LogBuilder = new();
 
-    // --- painting -----------------------------------------------------------------
+    // --- canvas device-independent bitmap -----------------------------------------
     private static IntPtr _canvasDib;
     private static IntPtr _canvasBits;
     private static IntPtr _canvasMemoryDc;
@@ -91,64 +89,69 @@ internal static class MainWindow
     private static int _canvasWidth;
     private static int _canvasHeight;
 
+    /// <summary>Appended log characters, used to bound the edit control's size.</summary>
+    private static int _logLength;
+
+    /// <summary>Every line appended so far, for the self-check report.</summary>
+    private static readonly System.Text.StringBuilder LogLines = new();
+
+    // --- self-check ---------------------------------------------------------------
     private static bool _selfCheck;
-    private static int _selfCheckDeadlineMs;
-    private static string? _selfCheckOutputPath;
-    private static readonly StringBuilder SelfCheckLog = new();
-    private static int _paintCount;
-    private static int _timerCount;
-    private static int _nativeExceptionCount;
+    private static string? _selfCheckOut;
+    private static readonly System.Text.StringBuilder SelfCheckLog = new();
+
+    /// <summary>This window's handle, so the capture session can exclude it as a capture target.</summary>
+    public static IntPtr WindowHandle => _frame;
+
+    // -----------------------------------------------------------------------------
+    // Entry points
+    // -----------------------------------------------------------------------------
+
+    /// <summary>Opens the window and runs until it closes.</summary>
+    public static int Run() => RunCore(0, null);
 
     /// <summary>
-    /// Creates the real window and pumps messages for a short while, then exits.
+    /// Opens the real window, drives it briefly, and exits.
     /// </summary>
+    /// <param name="milliseconds">How long to run before closing.</param>
+    /// <param name="reportPath">Where to write the report.</param>
     /// <remarks>
+    /// A GUI is otherwise only verifiable by a human looking at it. This runs the genuine code paths -
+    /// class registration, the <c>[UnmanagedCallersOnly]</c> window procedures, control creation, layout,
+    /// the capture timer, the canvas paint - inside an automated run, so an access violation becomes a
+    /// non-zero exit status instead of a window that quietly fails to appear.
     /// <para>
-    /// Exists because a GUI is otherwise only verifiable by a human looking at it. This runs the
-    /// genuine code paths - class registration, the <c>[UnmanagedCallersOnly]</c> window
-    /// procedures, control creation, layout, the capture timer and the canvas paint - inside an
-    /// automated run, so an access violation or an exception that never crosses back into native
-    /// code turns into a non-zero exit status instead of a window that quietly fails to appear.
-    /// </para>
-    /// <para>
-    /// It also writes a structured report to a file. That is not redundant with the exit code:
-    /// launching a GUI-subsystem process and waiting for it is unreliable from some automation
-    /// hosts (the wait itself hangs even though the process has already exited), so the report is
-    /// what an automated check should actually read.
+    /// The report file matters as much as the exit code: launching a GUI-subsystem process and waiting for
+    /// it is unreliable from some automation hosts (the wait hangs even after the process has exited), so
+    /// an automated check should read the report rather than depend on the wait.
     /// </para>
     /// </remarks>
     public static int SelfCheck(int milliseconds, string? reportPath)
     {
         _selfCheck = true;
-        _selfCheckDeadlineMs = milliseconds;
-        _selfCheckOutputPath = reportPath;
+        _selfCheckOut = reportPath;
         SelfCheckLog.Clear();
-        SelfCheckLog.AppendLine($"rattrap GUI self-check, budget {milliseconds} ms");
-
-        // Written immediately and rewritten at every milestone. If the process dies or hangs
-        // somewhere unexpected, the file says exactly how far it got, which is the only reliable
-        // way to diagnose a window procedure failure from outside the process.
+        SelfCheckLog.AppendLine($"rat-trap GUI self-check, budget {milliseconds} ms");
         FlushSelfCheck();
 
-        int result = Run();
+        int result = RunCore(milliseconds, reportPath);
 
         int failures = _nativeExceptionCount + (_paintCount == 0 ? 1 : 0) + (_timerCount == 0 ? 1 : 0);
         SelfCheckLog.AppendLine($"native window procedure exceptions : {_nativeExceptionCount}");
         SelfCheckLog.AppendLine($"canvas paints completed           : {_paintCount}");
         SelfCheckLog.AppendLine($"capture timer ticks               : {_timerCount}");
-        SelfCheckLog.AppendLine($"session reported a failure        : {_sessionFailed}");
-        SelfCheckLog.AppendLine($"capture source available          : {_source is not null}");
-        SelfCheckLog.AppendLine($"pointer-shape provider available  : {_shapeProvider is not null}");
-        SelfCheckLog.AppendLine($"final mode                        : {_mode}");
-        SelfCheckLog.AppendLine($"cursor obtained                   : {_cursor is not null}");
+        SelfCheckLog.AppendLine($"session failed                   : {_sessionFailed}");
+        SelfCheckLog.AppendLine($"settings file                    : {_settings.FilePath}");
+        SelfCheckLog.AppendLine($"hot key registered               : {_hotKeyEverRegistered}");
+        SelfCheckLog.AppendLine($"cursor obtained                  : {_cursor is not null}");
         if (_cursor is not null)
         {
-            SelfCheckLog.AppendLine($"cursor                            : {_cursor.Width}x{_cursor.Height} " +
+            SelfCheckLog.AppendLine($"cursor                           : {_cursor.Width}x{_cursor.Height} " +
                                     $"hotspot ({_cursor.HotspotX},{_cursor.HotspotY}) {_cursor.Provenance}");
         }
-        SelfCheckLog.AppendLine($"result                            : {(result == 0 && failures == 0 ? "PASS" : "FAIL")}");
+        SelfCheckLog.AppendLine($"result                           : {(result == 0 && failures == 0 ? "PASS" : "FAIL")}");
         SelfCheckLog.AppendLine("--- session log ---");
-        SelfCheckLog.Append(LogBuilder.ToString());
+        SelfCheckLog.Append(LogLines);
         FlushSelfCheck();
 
         return result == 0 && failures == 0 ? 0 : 1;
@@ -156,14 +159,13 @@ internal static class MainWindow
 
     private static void FlushSelfCheck()
     {
-        if (string.IsNullOrWhiteSpace(_selfCheckOutputPath))
+        if (string.IsNullOrWhiteSpace(_selfCheckOut))
         {
             return;
         }
-
         try
         {
-            File.WriteAllText(_selfCheckOutputPath, SelfCheckLog.ToString());
+            File.WriteAllText(_selfCheckOut, SelfCheckLog.ToString());
         }
         catch
         {
@@ -171,23 +173,22 @@ internal static class MainWindow
         }
     }
 
-    private static void Milestone(string text)
+    private static int RunCore(int selfCheckMs, string? reportPath)
     {
-        SelfCheckLog.AppendLine($"milestone: {text}");
-        FlushSelfCheck();
-    }
+        _ = reportPath;
+        _settings = AppSettings.Load();
 
-    public static int Run()
-    {
-        Milestone("Run entered");
         IntPtr instance = Kernel32.GetModuleHandleW(null);
         _font = Gdi32.GetStockObject(Gdi32.DEFAULT_GUI_FONT);
+        // IDI_APPLICATION is the resource id the .NET SDK embeds ApplicationIcon under, so this returns
+        // this program's own icon rather than the generic system one.
+        _icon = User32.LoadIconW(instance, User32.IDI_APPLICATION);
 
         bool registered;
         unsafe
         {
-            // Taking the address of an [UnmanagedCallersOnly] method is the only AOT-safe way to
-            // hand a managed callback to native code; a delegate would need runtime marshalling.
+            // Taking the address of an [UnmanagedCallersOnly] method is the only AOT-safe way to hand a
+            // managed callback to native code; a delegate would need runtime marshalling.
             registered = RegisterClass("RatTrapFrame", &FrameProc)
                       && RegisterClass("RatTrapCanvas", &CanvasProc);
         }
@@ -200,11 +201,10 @@ internal static class MainWindow
 
         var monitors = Monitors.Enumerate();
         int dpi = (int)(monitors.Count > 0 ? monitors[0].DpiX : 96);
-        int width = (int)(1120 * dpi / 96.0);
-        int height = (int)(720 * dpi / 96.0);
+        int width = (int)(1180 * dpi / 96.0);
+        int height = (int)(760 * dpi / 96.0);
 
-        Milestone("classes registered");
-        _frame = User32.CreateWindowExW(0, "RatTrapFrame", "rat-trap - cursor recovery",
+        _frame = User32.CreateWindowExW(0, "RatTrapFrame", "rat-trap - cursor and crosshair recovery",
             User32.WS_OVERLAPPEDWINDOW, 80, 60, width, height, IntPtr.Zero, IntPtr.Zero, instance, IntPtr.Zero);
         if (_frame == IntPtr.Zero)
         {
@@ -212,39 +212,39 @@ internal static class MainWindow
             return 1;
         }
 
-        Milestone($"frame window created, handle=0x{_frame:X}");
+        SelfCheckLog.AppendLine($"milestone: frame window created, handle=0x{_frame:X}");
         User32.ShowWindow(_frame, User32.SW_SHOW);
         User32.UpdateWindow(_frame);
 
         if (_selfCheck)
         {
-            // Exercise the whole pipeline rather than just creating a window: start a session,
-            // force a synchronous paint, then let the timer run.
             StartSession();
             User32.UpdateWindow(_frame);
             if (_canvas != IntPtr.Zero)
             {
                 User32.UpdateWindow(_canvas);
             }
-            User32.SetTimer(_frame, (UIntPtr)(TimerId + 1), (uint)_selfCheckDeadlineMs, IntPtr.Zero);
+            User32.SetTimer(_frame, (UIntPtr)SelfCheckTimerId, (uint)selfCheckMs, IntPtr.Zero);
         }
 
-        Milestone("entering message loop");
         while (true)
         {
             int result = User32.GetMessageW(out MSG message, IntPtr.Zero, 0, 0);
-            if (result == 0) break;
-            if (result == -1) break;
+            if (result is 0 or -1)
+            {
+                break;
+            }
             User32.TranslateMessage(ref message);
             User32.DispatchMessageW(ref message);
         }
 
-        Milestone("message loop exited");
+        SelfCheckLog.AppendLine("milestone: message loop exited");
         Shutdown();
         return 0;
     }
 
-    private static unsafe bool RegisterClass(string name, delegate* unmanaged[Stdcall]<IntPtr, uint, UIntPtr, IntPtr, IntPtr> proc)
+    private static unsafe bool RegisterClass(string name,
+        delegate* unmanaged[Stdcall]<IntPtr, uint, UIntPtr, IntPtr, IntPtr> proc)
     {
         IntPtr namePtr = Marshal.StringToHGlobalUni(name);
         try
@@ -255,6 +255,8 @@ internal static class MainWindow
                 style = 0x0002 | 0x0001, // CS_HREDRAW | CS_VREDRAW
                 lpfnWndProc = (IntPtr)proc,
                 hInstance = Kernel32.GetModuleHandleW(null),
+                hIcon = _icon,
+                hIconSm = _icon,
                 hCursor = User32.LoadCursorW(IntPtr.Zero, new IntPtr(32512)), // IDC_ARROW
                 hbrBackground = IntPtr.Zero,
                 lpszClassName = namePtr,
@@ -288,9 +290,8 @@ internal static class MainWindow
 
                 case User32.WM_TIMER:
                     _timerCount++;
-                    if (wParam.ToUInt64() == TimerId + 1)
+                    if (wParam.ToUInt64() == SelfCheckTimerId)
                     {
-                        // Self-check only: run for the requested time, then close the loop.
                         User32.KillTimer(hwnd, wParam);
                         User32.PostQuitMessage(0);
                         return IntPtr.Zero;
@@ -298,12 +299,19 @@ internal static class MainWindow
                     OnTimer();
                     return IntPtr.Zero;
 
+                case User32.WM_HOTKEY:
+                    if (wParam.ToUInt64() == HotKeyId)
+                    {
+                        ToggleSession("global hot key");
+                    }
+                    return IntPtr.Zero;
+
                 case User32.WM_COMMAND:
                     OnCommand((int)(wParam.ToUInt64() & 0xFFFF));
                     return IntPtr.Zero;
 
                 case User32.WM_CLOSE:
-                    StopSession();
+                    Shutdown();
                     User32.DestroyWindow(hwnd);
                     return IntPtr.Zero;
 
@@ -338,71 +346,158 @@ internal static class MainWindow
             User32.ES_MULTILINE | User32.ES_AUTOVSCROLL | User32.ES_READONLY,
             0, 0, 10, 10, frame, new IntPtr(IdLog), instance, IntPtr.Zero);
 
-        CreateButton(frame, instance, IdStart, "Start");
-        CreateButton(frame, instance, IdStop, "Stop");
-        CreateButton(frame, instance, IdExportPng, "PNG");
-        CreateButton(frame, instance, IdExportCur, "CUR");
-        CreateButton(frame, instance, IdExportAni, "ANI");
-        CreateButton(frame, instance, IdExportAll, "Export all");
-        CreateButton(frame, instance, IdSelfTest, "Self-test");
+        CreateControl(frame, instance, "BUTTON", "Target", IdModeGroup,
+            User32.WS_CHILD | User32.WS_VISIBLE | BS_GROUPBOX);
+        CreateControl(frame, instance, "BUTTON", "Cursor", IdModeCursor,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | BS_AUTORADIOBUTTON | WS_GROUP);
+        CreateControl(frame, instance, "BUTTON", "Crosshair", IdModeCrosshair,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | BS_AUTORADIOBUTTON);
+
+        CreateControl(frame, instance, "STATIC", string.Empty, IdSaveDir,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.SS_LEFT);
+        CreateControl(frame, instance, "STATIC", string.Empty, IdHotKeyInfo,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.SS_LEFT);
+
+        // One toggle instead of a Start/Stop pair, "Open folder" instead of a browse dialog, and no
+        // per-format export buttons: every format is written automatically the moment a cursor exists,
+        // so a button for each one was three chances to lose the result.
+        CreateControl(frame, instance, "BUTTON", "Start", IdToggle,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.BS_PUSHBUTTON);
+        CreateControl(frame, instance, "BUTTON", "Open folder", IdBrowse,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.BS_PUSHBUTTON);
+        CreateControl(frame, instance, "BUTTON", "Self-test", IdSelfTest,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.BS_PUSHBUTTON);
 
         if (_font != IntPtr.Zero)
         {
-            foreach (int id in new[] { IdStart, IdStop, IdExportPng, IdExportCur, IdExportAni, IdExportAll, IdSelfTest, IdLog })
+            foreach (int id in new[] { IdModeGroup, IdModeCursor, IdModeCrosshair, IdToggle, IdBrowse,
+                                       IdSelfTest, IdLog, IdSaveDir, IdHotKeyInfo })
             {
-                User32.SendMessageW(User32.GetDlgItem(frame, id), User32.WM_SETFONT, (UIntPtr)(ulong)_font, new IntPtr(1));
+                User32.SendMessageW(User32.GetDlgItem(frame, id), User32.WM_SETFONT,
+                    (UIntPtr)(ulong)_font, new IntPtr(1));
             }
         }
 
+        CheckRadio(_settings.Target == CaptureTarget.Crosshair ? IdModeCrosshair : IdModeCursor);
+        SetText(IdSaveDir, $"Saving to {_settings.ResolveSaveDirectory()}");
+        SetText(IdHotKeyInfo, _settings.HotKeyEnabled
+            ? $"Hot key: {_settings.HotKey}"
+            : "Hot key: disabled in rat-trap.ini");
+
+        RegisterHotKey(frame);
+
         AppendLog("rat-trap");
-        AppendLog("Start begins capture. The tool first asks the compositor for the operating system's own");
-        AppendLog("cursor; if the OS is not drawing one (a fullscreen game drawing its own), it switches to");
-        AppendLog("reconstruction, and you should move the pointer across a textured area.");
+        AppendLog("Start (or the hot key) acquires the target and saves every format automatically.");
+        AppendLog("Cursor mode follows the pointer. Crosshair mode watches a fixed square at the centre of");
+        AppendLog("the foreground window, so switch to the game and aim at something that moves.");
+        if (_settings.UsingFallbackPath)
+        {
+            AppendLog($"note: the program directory is not writable, so settings live in {_settings.FilePath}");
+        }
+        AppendLog($"settings: {_settings.Describe()}");
         SyncPreview();
     }
 
-    private static void CreateButton(IntPtr parent, IntPtr instance, int id, string text)
-        => User32.CreateWindowExW(0, "BUTTON", text,
-            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.BS_PUSHBUTTON,
-            0, 0, 10, 10, parent, new IntPtr(id), instance, IntPtr.Zero);
+    private static void CreateControl(IntPtr parent, IntPtr instance, string className, string text, int id, uint style)
+        => User32.CreateWindowExW(0, className, text, style, 0, 0, 10, 10,
+            parent, new IntPtr(id), instance, IntPtr.Zero);
+
+    private static void RegisterHotKey(IntPtr frame)
+    {
+        if (!_settings.HotKeyEnabled)
+        {
+            return;
+        }
+
+        if (!AppSettings.TryParseHotKey(_settings.HotKey, out uint modifiers, out uint virtualKey, out string error))
+        {
+            AppendLog($"the configured hot key could not be parsed: {error}; edit hotkey in {AppSettings.FileName}");
+            return;
+        }
+
+        // MOD_NOREPEAT is already folded into the parsed modifiers by TryParseHotKey, so holding the key
+        // does not toggle capture many times a second.
+        if (User32.RegisterHotKey(frame, HotKeyId, modifiers, virtualKey))
+        {
+            _hotKeyRegistered = true;
+            _hotKeyEverRegistered = true;
+        }
+        else
+        {
+            AppendLog($"the hot key {_settings.HotKey} is already taken by another program; " +
+                      $"change hotkey in {AppSettings.FileName} and restart");
+        }
+    }
 
     private static void Layout(IntPtr frame)
     {
         User32.GetClientRect(frame, out RECT client);
         int dpi = (int)User32.GetDpiForWindow(frame);
         int scale = Math.Max(1, dpi / 96);
-        int buttonHeight = 30 * scale;
         int gap = 8 * scale;
-        int bottom = buttonHeight + (gap * 2);
+        int rowHeight = 22 * scale;
+        int buttonHeight = 30 * scale;
 
-        int contentTop = gap;
-        int contentHeight = Math.Max(10, client.Height - bottom - contentTop);
-        int canvasWidth = Math.Max(10, (int)((client.Width - (gap * 3)) * 0.56));
+        int top = gap;
+        int modeHeight = (rowHeight * 2) + (gap * 3);
+
+        Move(IdModeGroup, gap, top, 200 * scale, modeHeight);
+        Move(IdModeCursor, gap + (12 * scale), top + (16 * scale), 90 * scale, rowHeight);
+        Move(IdModeCrosshair, gap + (12 * scale), top + (16 * scale) + rowHeight + (gap / 2), 120 * scale, rowHeight);
+
+        int infoLeft = gap + (210 * scale);
+        int infoWidth = Math.Max(80, client.Width - infoLeft - gap);
+        Move(IdSaveDir, infoLeft, top + (6 * scale), infoWidth, rowHeight);
+        Move(IdHotKeyInfo, infoLeft, top + (6 * scale) + rowHeight, infoWidth, rowHeight);
+
+        int contentTop = top + modeHeight + gap;
+        int bottom = buttonHeight + (gap * 2);
+        int contentHeight = Math.Max(10, client.Height - contentTop - bottom);
+        int canvasWidth = Math.Max(10, (int)((client.Width - (gap * 3)) * 0.54));
         int logWidth = Math.Max(10, client.Width - canvasWidth - (gap * 3));
 
-        Move(_canvas, gap, contentTop, canvasWidth, contentHeight);
-        Move(_log, gap + canvasWidth + gap, contentTop, logWidth, contentHeight);
+        MoveWindow(_canvas, gap, contentTop, canvasWidth, contentHeight);
+        MoveWindow(_log, gap + canvasWidth + gap, contentTop, logWidth, contentHeight);
 
         int x = gap;
         int y = client.Height - buttonHeight - gap;
-        foreach (int id in new[] { IdStart, IdStop, IdExportPng, IdExportCur, IdExportAni, IdExportAll, IdSelfTest })
+        foreach ((int id, int width) in new[] { (IdToggle, 100), (IdBrowse, 110), (IdSelfTest, 90) })
         {
-            IntPtr control = User32.GetDlgItem(frame, id);
-            int width = id switch
-            {
-                IdExportAll => 90 * scale,
-                IdSelfTest => 90 * scale,
-                _ => 70 * scale,
-            };
-            Move(control, x, y, width, buttonHeight);
-            x += width + gap;
+            Move(id, x, y, width * scale, buttonHeight);
+            x += (width * scale) + gap;
         }
     }
 
-    private static void Move(IntPtr window, int x, int y, int width, int height)
+    private static void Move(int id, int x, int y, int width, int height)
+        => MoveWindow(User32.GetDlgItem(_frame, id), x, y, width, height);
+
+    private static void MoveWindow(IntPtr window, int x, int y, int width, int height)
     {
-        if (window == IntPtr.Zero) return;
-        User32.MoveWindow(window, x, y, width, height, true);
+        if (window != IntPtr.Zero)
+        {
+            User32.MoveWindow(window, x, y, width, height, true);
+        }
+    }
+
+    private static void CheckRadio(int id)
+    {
+        User32.SendMessageW(User32.GetDlgItem(_frame, IdModeCursor), BM_SETCHECK, UIntPtr.Zero, IntPtr.Zero);
+        User32.SendMessageW(User32.GetDlgItem(_frame, IdModeCrosshair), BM_SETCHECK, UIntPtr.Zero, IntPtr.Zero);
+
+        IntPtr target = User32.GetDlgItem(_frame, id);
+        if (target != IntPtr.Zero)
+        {
+            User32.SendMessageW(target, BM_SETCHECK, (UIntPtr)BST_CHECKED, IntPtr.Zero);
+        }
+    }
+
+    private static void SetText(int id, string text)
+    {
+        IntPtr control = User32.GetDlgItem(_frame, id);
+        if (control != IntPtr.Zero)
+        {
+            User32.SetWindowTextW(control, text);
+        }
     }
 
     // -----------------------------------------------------------------------------
@@ -413,307 +508,224 @@ internal static class MainWindow
     {
         switch (id)
         {
-            case IdStart: StartSession(); break;
-            case IdStop: StopSession(); break;
-            case IdSelfTest: RunSelfTestInGui(); break;
-            case IdExportPng: Export("png"); break;
-            case IdExportCur: Export("cur"); break;
-            case IdExportAni: Export("ani"); break;
-            case IdExportAll: Export("all"); break;
+            case IdToggle:
+                ToggleSession("button");
+                break;
+
+            case IdModeCursor:
+            case IdModeCrosshair:
+                _settings.Target = id == IdModeCrosshair ? CaptureTarget.Crosshair : CaptureTarget.Cursor;
+                _settings.Save();
+                CheckRadio(id);
+                AppendLog($"target set to {_settings.Target}; settings saved to {_settings.FilePath}");
+                break;
+
+            case IdBrowse:
+                OpenSaveFolder();
+                break;
+
+            case IdSelfTest:
+                RunSelfTestInGui();
+                break;
         }
+    }
+
+    private static void ToggleSession(string reason)
+    {
+        if (_session?.IsRunning == true)
+        {
+            StopSession();
+            AppendLog($"capture stopped ({reason})");
+            return;
+        }
+
+        AppendLog($"capture started ({reason})");
+        StartSession();
     }
 
     private static void StartSession()
     {
-        if (_running) return;
-
-        try
-        {
-            User32.GetCursorPos(out POINT cursor);
-            var monitors = Monitors.Enumerate();
-            if (monitors.Count == 0)
-            {
-                AppendLog("no monitors reported by the system");
-                return;
-            }
-
-            _monitor = Monitors.FromPoint(cursor.X, cursor.Y);
-            _sessionFailed = false;
-            _cursor = null;
-            _lastShapeHash = 0;
-            _ticksSinceStart = 0;
-            _mode = CaptureMode.WaitingForCompositor;
-
-            AppendLog($"monitor: [{_monitor.Index}] {_monitor.DeviceName} {_monitor.Rect} dpi={_monitor.DpiX} scale={_monitor.Scale:F2}");
-
-            // One capture source, for the whole session. A Desktop Duplication session is exclusive
-            // per output: opening a second one on the same monitor fails with E_INVALIDARG, and an
-            // earlier version of this window did exactly that (one duplication for the pointer shape,
-            // another through the factory), after which the pointer shape never arrived at all. One
-            // duplication serves both roles anyway, because it excludes only the system cursor while
-            // still containing any cursor an application draws for itself.
-            try
-            {
-                _source = CaptureFactory.Create(_monitor, CaptureBackend.Auto, out IReadOnlyList<string> diagnostics);
-                foreach (string line in diagnostics) AppendLog(line);
-
-                _shapeProvider = CaptureFactory.AsPointerShapeProvider(_source);
-                if (_shapeProvider is null)
-                {
-                    AppendLog("this backend cannot report the compositor's pointer shape; the compositor path " +
-                              "will use the GDI cursor bitmap instead");
-                }
-
-                _reconstructor = new CursorReconstructor();
-                _roi = new ArgbBitmap(Math.Min(160, _monitor.Width), Math.Min(160, _monitor.Height));
-                _status = _shapeProvider is null
-                    ? "Reading the GDI cursor bitmap..."
-                    : "Waiting for the compositor to report a pointer shape...";
-            }
-            catch (Exception ex)
-            {
-                AppendLog($"capture backend unavailable: {ex.Message}");
-                _source = null;
-                _shapeProvider = null;
-            }
-
-            _running = true;
-            User32.SetTimer(_frame, (UIntPtr)TimerId, TimerIntervalMs, IntPtr.Zero);
-            SyncPreview();
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"start failed: {ex.GetType().Name}: {ex.Message}");
-        }
+        _sessionFailed = false;
+        _cursor = null;
+        _session?.Dispose();
+        _session = new CaptureSession(_settings, AppendLog);
+        _session.Start();
+        _status = _session.Status;
+        _detail = _session.Detail;
+        _sessionFailed = _session.Phase == SessionPhase.Failed;
+        SetToggleText();
+        User32.SetTimer(_frame, (UIntPtr)CaptureTimerId, TimerIntervalMs, IntPtr.Zero);
+        SyncPreview();
     }
 
     private static void StopSession()
     {
         if (_frame != IntPtr.Zero)
         {
-            User32.KillTimer(_frame, (UIntPtr)TimerId);
+            User32.KillTimer(_frame, (UIntPtr)CaptureTimerId);
         }
-        _running = false;
+        _session?.Dispose();
+        _session = null;
+        SetToggleText();
+    }
 
-        _source?.Dispose();
-        _source = null;
-        _shapeProvider = null;
-        _reconstructor = null;
-        _roi = null;
+    private static void SetToggleText()
+    {
+        IntPtr toggle = User32.GetDlgItem(_frame, IdToggle);
+        if (toggle != IntPtr.Zero)
+        {
+            // One button whose label says what pressing it does next, rather than two buttons of which
+            // one is always the wrong one to press.
+            User32.SetWindowTextW(toggle, _session?.IsRunning == true ? "Stop" : "Start");
+        }
     }
 
     private static void OnTimer()
     {
-        if (!_running || _monitor is null || _sessionFailed) return;
+        if (_session is null)
+        {
+            return;
+        }
 
+        var step = _session.Tick();
+        _status = _session.Status;
+        _detail = _session.Detail;
+
+        if (_session.Phase == SessionPhase.Failed)
+        {
+            _sessionFailed = true;
+        }
+
+        if (step.Acquired)
+        {
+            _cursor = _session.Cursor;
+            SyncPreview();
+            SetToggleText();
+            AppendLog(_session.Status);
+            if (step.Saved)
+            {
+                AppendLog($"done. {Path.GetFileName(step.SavedBasePath)} written in {_settings.ResolveSaveDirectory()}");
+            }
+            return;
+        }
+
+        if (!_session.IsRunning)
+        {
+            SetToggleText();
+            if (_frame != IntPtr.Zero)
+            {
+                User32.KillTimer(_frame, (UIntPtr)CaptureTimerId);
+            }
+        }
+
+        if (_canvas != IntPtr.Zero)
+        {
+            User32.InvalidateRect(_canvas, IntPtr.Zero, false);
+        }
+    }
+
+    private static void OpenSaveFolder()
+    {
         try
         {
-            _ticksSinceStart++;
-
-            switch (_mode)
-            {
-                case CaptureMode.WaitingForCompositor:
-                    if (TryCompositorTick())
-                    {
-                        _mode = CaptureMode.Compositor;
-                        return;
-                    }
-
-                    // The compositor only announces a shape when it changes, so an untouched mouse can
-                    // produce no report at all. Nudge once, then give up and reconstruct.
-                    if (_ticksSinceStart == 10)
-                    {
-                        // Two independent attempts, because either can be the one that works. A fresh
-                        // duplication always delivers a full initial frame including the pointer shape,
-                        // and the one-pixel nudge supplies the position change the compositor waits for.
-                        try
-                        {
-                            _source?.Reinitialize();
-                            AppendLog("no compositor shape yet; reopened the duplication session to force a " +
-                                      "fresh initial frame");
-                        }
-                        catch (Exception ex)
-                        {
-                            AppendLog($"could not reopen the duplication session: {ex.Message}");
-                        }
-
-                        if (PointerNudge.TryNudge(out _))
-                        {
-                            AppendLog("also nudged the pointer one pixel so the compositor re-announces the cursor");
-                        }
-                    }
-
-                    if (_ticksSinceStart > 20)
-                    {
-                        _mode = CaptureMode.Reconstructing;
-                        AppendLog("no compositor pointer shape appeared: the operating system is not drawing the");
-                        AppendLog("cursor, so an application is probably drawing its own. Switching to reconstruction.");
-                        _status = "Reconstructing - move the pointer across a textured area.";
-                    }
-                    return;
-
-                case CaptureMode.Compositor:
-                    TryCompositorTick();
-                    return;
-
-                case CaptureMode.Reconstructing:
-                    ReconstructionTick();
-                    return;
-            }
+            string directory = _settings.ResolveSaveDirectory();
+            Directory.CreateDirectory(directory);
+            User32.ShellExecuteW(_frame, "open", directory, null, null, User32.SW_SHOWNORMAL);
+            AppendLog($"opened {directory}");
         }
         catch (Exception ex)
         {
-            _sessionFailed = true;
-            AppendLog($"capture stopped: {ex.GetType().Name}: {ex.Message}");
-            _status = "Capture failed. See the log.";
-            SyncPreview();
+            AppendLog($"could not open the save folder: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
-    /// <summary>Reads the compositor's pointer shape. Returns true once a cursor is in hand.</summary>
-    private static bool TryCompositorTick()
+    private static void RunSelfTestInGui()
     {
-        if (_source is null || _monitor is null) return false;
-
-        if (_shapeProvider is null)
+        try
         {
-            // No duplication, so the compositor path can only fall back to the GDI cursor bitmap.
-            var gdi = SystemCursorReader.Read();
-            if (gdi.Cursor is null) return false;
-            _cursor = gdi.Cursor;
-            _status = $"GDI cursor bitmap: {_cursor.Width}x{_cursor.Height}, " +
-                      $"hotspot ({_cursor.HotspotX},{_cursor.HotspotY})";
-            _detail = gdi.Notes;
-            AppendLog(_status);
-            AppendLog($"  {gdi.Notes}");
-            SyncPreview();
-            return true;
+            var lines = new List<string>();
+            lines.AddRange(SelfTest.CoreSelfTest.Run());
+            lines.AddRange(OutputSelfTest.Run());
+
+            int failures = lines.Count(l => l.TrimStart().StartsWith("FAIL", StringComparison.Ordinal));
+            AppendLog($"self-test: {(failures == 0 ? "PASSED" : $"FAILED ({failures})")}");
+            foreach (string line in lines.Where(l => l.TrimStart().StartsWith("FAIL", StringComparison.Ordinal)))
+            {
+                AppendLog("  " + line);
+            }
+
+            User32.MessageBoxW(_frame,
+                failures == 0 ? "Self-test passed." : $"Self-test failed with {failures} failure(s); see the log.",
+                "rat-trap", User32.MB_OK | User32.MB_ICONINFORMATION | User32.MB_SETFOREGROUND);
         }
-
-        User32.GetCursorPos(out POINT cursor);
-        int width = Math.Min(96, _monitor.Width);
-        int height = Math.Min(96, _monitor.Height);
-        var scratch = EnsureRoi(width, height);
-        RECT roi = RECT.FromSize(cursor.X - (width / 2), cursor.Y - (height / 2), width, height).ClampInside(_monitor.Rect);
-
-        // A non-zero timeout matters here: GetFramePointerShape is only valid for a frame that was
-        // actually acquired, and AcquireNextFrame(0) times out immediately when nothing has changed,
-        // so a zero timeout silently never reports the cursor at all.
-        var result = _source!.Capture(roi, scratch, 100);
-        if (result.Status == CaptureStatus.NeedsReinitialize)
+        catch (Exception ex)
         {
-            AppendLog($"compositor: reinitialising ({result.Error})");
-            _source!.Reinitialize();
-            return false;
+            AppendLog($"self-test error: {ex.GetType().Name}: {ex.Message}");
         }
-
-        if (!_shapeProvider.TryGetPointerShape(out PointerShapeSnapshot shape) || !shape.Visible)
-        {
-            return _cursor is not null;
-        }
-
-        ulong hash = Hashing.Fnv1a64(shape.Buffer);
-        if (hash == _lastShapeHash && _cursor is not null)
-        {
-            return true;
-        }
-
-        _lastShapeHash = hash;
-        var decoded = PointerShapeDecoder.Decode(shape);
-        if (!decoded.Success)
-        {
-            AppendLog($"compositor: shape decode failed: {decoded.Error}");
-            return false;
-        }
-
-        POINT reported = default;
-        bool havePosition = false;
-        if (_source is DxgiDuplicationSource dxgi)
-        {
-            havePosition = dxgi.TryGetPointerPositionInOutput(out reported, out _);
-        }
-        var anchor = PointerAnchorResolver.Resolve(shape, _monitor, havePosition, reported, cursor);
-
-        var image = decoded.Cursor!;
-        _cursor = new CursorImage(image.Image)
-        {
-            HotspotX = anchor.HotspotX,
-            HotspotY = anchor.HotspotY,
-            PreferredEncoding = image.PreferredEncoding,
-            XorMaskBgra = image.XorMaskBgra,
-            AndMask1Bpp = image.AndMask1Bpp,
-            XorMask1Bpp = image.XorMask1Bpp,
-            Provenance = image.Provenance,
-            Note = image.Note,
-        };
-
-        _status = $"Compositor cursor: {_cursor.Width}x{_cursor.Height}, " +
-                  $"hotspot ({_cursor.HotspotX},{_cursor.HotspotY}), {_cursor.PreferredEncoding}";
-        _detail = $"type {shape.ShapeType}; {decoded.Notes}";
-        AppendLog(_status);
-        AppendLog($"  anchor ({anchor.Source}): {anchor.Explanation}");
-        SyncPreview();
-        return true;
     }
 
-    /// <summary>Feeds one observation into the solver and periodically re-solves.</summary>
-    private static void ReconstructionTick()
+    // -----------------------------------------------------------------------------
+    // Log
+    // -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Appends one line and keeps it visible.
+    /// </summary>
+    /// <remarks>
+    /// The first version rebuilt the whole control with <c>SetWindowTextW</c> on every line and then tried
+    /// to scroll with <c>EM_LINESCROLL</c> and zero offsets - which scrolls by zero lines - so the view
+    /// stayed where it was and the newest line was precisely the one the user could not see. Two changes
+    /// fix it properly: append with <c>EM_REPLACESEL</c> after moving the selection to the end, then call
+    /// <c>EM_SCROLLCARET</c>, which scrolls the caret into view rather than nudging by an amount that would
+    /// have to be guessed.
+    /// </remarks>
+    private static void AppendLog(string line)
     {
-        if (_reconstructor is null || _source is null || _monitor is null || _roi is null) return;
+        LogLines.AppendLine(line);
+        SelfCheckLog.AppendLine($"log: {line}");
 
-        User32.GetCursorPos(out POINT cursor);
-        RECT roi = RECT.FromSize(cursor.X - (_roi.Width / 2), cursor.Y - (_roi.Height / 2),
-            _roi.Width, _roi.Height).ClampInside(_monitor.Rect);
-
-        var result = _source.Capture(roi, _roi, 20);
-        if (result.Status == CaptureStatus.NeedsReinitialize)
-        {
-            _source.Reinitialize();
-            return;
-        }
-        if (!result.HasPixels) return;
-
-        _reconstructor.Observe(roi, _roi, cursor.X, cursor.Y);
-        _roiRect = roi;
-
-        _status = $"Reconstructing: {_reconstructor.FramesObserved} frames, " +
-                  $"background {_reconstructor.BackgroundPixelCount}px";
-        _detail = "Move the pointer across a textured area so the cursor varies against different backgrounds.";
-
-        // Solving is far more expensive than observing, so only do it occasionally.
-        if (_reconstructor.FramesObserved % 10 != 0) return;
-
-        var solved = _reconstructor.Solve();
-        if (!solved.Success)
+        if (_log == IntPtr.Zero)
         {
             return;
         }
 
-        _cursor = solved.Cursor;
-        _status = $"Reconstructed cursor: {_cursor!.Width}x{_cursor.Height}, " +
-                  $"hotspot ({_cursor.HotspotX},{_cursor.HotspotY}); " +
-                  $"{solved.Report.AlphaSolvedPixels} solved, " +
-                  $"{solved.Report.OpaqueAssumedPixels + solved.Report.UnresolvedPixels} assumed, " +
-                  $"{solved.Report.TransparentPixels} transparent";
-        _detail = $"pairs={solved.Report.PairsRecorded}, sceneChanges={solved.Report.SceneChanges}, " +
-                  $"encoding={_cursor.PreferredEncoding}";
-        SyncPreview();
+        try
+        {
+            // Bound the control: an unbounded EDIT gets slow and eventually refuses input.
+            if (_logLength > 200_000)
+            {
+                User32.SetWindowTextW(_log, string.Empty);
+                _logLength = 0;
+            }
+
+            IntPtr text = Marshal.StringToHGlobalUni(line + "\r\n");
+            try
+            {
+                User32.SendMessageW(_log, EM_SETSEL, EndOfText, IntPtr.Zero);
+                User32.SendMessageW(_log, EM_REPLACESEL, UIntPtr.Zero, text);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(text);
+            }
+
+            User32.SendMessageW(_log, EM_SCROLLCARET, UIntPtr.Zero, IntPtr.Zero);
+            _logLength += line.Length + 2;
+        }
+        catch (Exception ex)
+        {
+            _nativeExceptionCount++;
+            SelfCheckLog.AppendLine($"EXCEPTION appending to the log: {ex}");
+        }
     }
 
-    private static ArgbBitmap EnsureRoi(int width, int height)
-    {
-        if (_roi is null || _roi.Width != width || _roi.Height != height)
-        {
-            _roi = new ArgbBitmap(width, height);
-        }
-        return _roi;
-    }
+    /// <summary>The WPARAM that means "the end of the text" to <c>EM_SETSEL</c>.</summary>
+    private static UIntPtr EndOfText => new(unchecked((ulong)(long)-1));
 
     // -----------------------------------------------------------------------------
     // Preview
     // -----------------------------------------------------------------------------
 
-    /// <summary>Rebuilds the composited preview bitmap that the canvas blits.</summary>
     private static void SyncPreview()
     {
         if (_cursor is null)
@@ -728,13 +740,13 @@ internal static class MainWindow
             {
                 for (int x = 0; x < _cursor.Width; x++)
                 {
-                    ArgbPixel src = _cursor.Image.GetPixel(x, y);
+                    ArgbPixel source = _cursor.Image.GetPixel(x, y);
                     ArgbPixel under = checker.GetPixel(x, y);
-                    int a = src.A, inv = 255 - a;
+                    int alpha = source.A, inverse = 255 - alpha;
                     checker.SetPixel(x, y, new ArgbPixel(
-                        (byte)((src.B * a + under.B * inv + 127) / 255),
-                        (byte)((src.G * a + under.G * inv + 127) / 255),
-                        (byte)((src.R * a + under.R * inv + 127) / 255),
+                        (byte)((source.B * alpha + under.B * inverse + 127) / 255),
+                        (byte)((source.G * alpha + under.G * inverse + 127) / 255),
+                        (byte)((source.R * alpha + under.R * inverse + 127) / 255),
                         255));
                 }
             }
@@ -783,33 +795,28 @@ internal static class MainWindow
         try
         {
             User32.GetClientRect(hwnd, out RECT client);
-            if (client.Width <= 0 || client.Height <= 0) return;
-
-            if (!EnsureCanvasDib(client.Width, client.Height))
+            if (client.Width <= 0 || client.Height <= 0 || !EnsureCanvasDib(client.Width, client.Height))
             {
                 return;
             }
 
-            // Background.
             FillDib(client.Width, client.Height, new ArgbPixel(0x2A, 0x2A, 0x2A, 255));
 
             if (_preview is not null)
             {
                 int scale = Math.Max(1, Math.Min(6,
                     Math.Min((client.Width - 24) / Math.Max(1, _preview.Width),
-                             (client.Height - 60) / Math.Max(1, _preview.Height))));
+                             (client.Height - 70) / Math.Max(1, _preview.Height))));
                 int drawnWidth = _preview.Width * scale;
                 int drawnHeight = _preview.Height * scale;
                 int offsetX = (client.Width - drawnWidth) / 2;
-                int offsetY = Math.Max(8, (client.Height - drawnHeight) / 2);
+                int offsetY = Math.Max(56, (client.Height - drawnHeight) / 2);
 
                 BlitNearest(offsetX, offsetY, _preview, scale);
 
                 if (_cursor is not null && scale >= 2)
                 {
-                    int hx = offsetX + (_cursor.HotspotX * scale);
-                    int hy = offsetY + (_cursor.HotspotY * scale);
-                    DrawCrosshair(hx, hy, scale);
+                    DrawHotspotMark(offsetX + (_cursor.HotspotX * scale), offsetY + (_cursor.HotspotY * scale), scale);
                 }
             }
 
@@ -817,26 +824,27 @@ internal static class MainWindow
             Gdi32.SetDIBitsToDevice(dc, 0, 0, (uint)client.Width, (uint)client.Height, 0, 0, 0, (uint)client.Height,
                 _canvasBits, ref info, Gdi32.DIB_RGB_COLORS);
 
-            // Text after the bitmap so it is not overwritten.
             Gdi32.SetBkMode(dc, Gdi32.TRANSPARENT);
             IntPtr previousFont = Gdi32.SelectObject(dc, _font);
-            Gdi32.SetTextColor(dc, 0x00E8E8E8);
 
+            // Status text above the artwork, detail below it, so neither covers the pixels.
+            Gdi32.SetTextColor(dc, 0x00E8E8E8);
             var statusRect = RECT.FromSize(10, 8, client.Width - 20, 20);
             User32.DrawTextW(dc, _status, -1, ref statusRect, User32.DT_LEFT | User32.DT_TOP | User32.DT_NOPREFIX);
 
             if (_detail.Length > 0)
             {
                 Gdi32.SetTextColor(dc, 0x00A8A8A8);
-                var detailRect = RECT.FromSize(10, client.Height - 30, client.Width - 20, 24);
-                User32.DrawTextW(dc, _detail, -1, ref detailRect, User32.DT_LEFT | User32.DT_TOP | User32.DT_NOPREFIX);
+                var detailRect = RECT.FromSize(10, 28, client.Width - 20, 24);
+                User32.DrawTextW(dc, _detail, -1, ref detailRect,
+                    User32.DT_LEFT | User32.DT_TOP | User32.DT_NOPREFIX);
             }
 
             if (_preview is null)
             {
                 Gdi32.SetTextColor(dc, 0x00909090);
-                var emptyRect = RECT.FromSize(10, client.Height / 2, client.Width - 20, 40);
-                User32.DrawTextW(dc, "No cursor yet. Press Start.", -1, ref emptyRect,
+                var emptyRect = RECT.FromSize(10, client.Height / 2, client.Width - 20, 24);
+                User32.DrawTextW(dc, "Nothing captured yet.", -1, ref emptyRect,
                     User32.DT_LEFT | User32.DT_TOP | User32.DT_NOPREFIX);
             }
 
@@ -858,7 +866,10 @@ internal static class MainWindow
         ReleaseCanvasDib();
 
         IntPtr screenDc = User32.GetDC(IntPtr.Zero);
-        if (screenDc == IntPtr.Zero) return false;
+        if (screenDc == IntPtr.Zero)
+        {
+            return false;
+        }
 
         try
         {
@@ -921,9 +932,9 @@ internal static class MainWindow
 
     /// <summary>Nearest-neighbour scale blit, written out rather than delegated to GDI.</summary>
     /// <remarks>
-    /// <c>StretchBlt</c> would apply a halftone or colour-on-colour filter depending on the mode
-    /// that happens to be set, which turns an exact 3x view of a 1-pixel cursor edge into a blur.
-    /// Cursor artwork has to be inspected at the pixel level, so the scaling is explicit.
+    /// <c>StretchBlt</c> applies a halftone or colour-on-colour filter depending on the mode that happens
+    /// to be set, which turns an exact 3x view of a 1-pixel cursor edge into a blur. Cursor artwork has to
+    /// be inspected at the pixel level, so the scaling is explicit.
     /// </remarks>
     private static unsafe void BlitNearest(int offsetX, int offsetY, ArgbBitmap source, int scale)
     {
@@ -934,14 +945,20 @@ internal static class MainWindow
         for (int y = 0; y < drawnHeight; y++)
         {
             int canvasY = offsetY + y;
-            if (canvasY < 0 || canvasY >= _canvasHeight) continue;
+            if (canvasY < 0 || canvasY >= _canvasHeight)
+            {
+                continue;
+            }
             int sourceY = y / scale;
             byte* row = bits + ((long)canvasY * _canvasWidth * 4);
 
             for (int x = 0; x < drawnWidth; x++)
             {
                 int canvasX = offsetX + x;
-                if (canvasX < 0 || canvasX >= _canvasWidth) continue;
+                if (canvasX < 0 || canvasX >= _canvasWidth)
+                {
+                    continue;
+                }
                 int sourceIndex = ((sourceY * source.Width) + (x / scale)) * 4;
                 row[(canvasX * 4)] = source.Pixels[sourceIndex];
                 row[(canvasX * 4) + 1] = source.Pixels[sourceIndex + 1];
@@ -951,7 +968,7 @@ internal static class MainWindow
         }
     }
 
-    private static unsafe void DrawCrosshair(int centerX, int centerY, int scale)
+    private static unsafe void DrawHotspotMark(int centerX, int centerY, int scale)
     {
         byte* bits = (byte*)_canvasBits;
         int arm = 6 * scale;
@@ -962,9 +979,15 @@ internal static class MainWindow
             for (int t = 0; t < thickness; t++)
             {
                 int py = y + t;
-                if (x < 0 || py < 0 || x >= _canvasWidth || py >= _canvasHeight) continue;
+                if (x < 0 || py < 0 || x >= _canvasWidth || py >= _canvasHeight)
+                {
+                    continue;
+                }
                 byte* pixel = bits + (((long)py * _canvasWidth + x) * 4);
-                pixel[0] = 0x30; pixel[1] = 0x30; pixel[2] = 0xFF; pixel[3] = 255;
+                pixel[0] = 0x30;
+                pixel[1] = 0x30;
+                pixel[2] = 0xFF;
+                pixel[3] = 255;
             }
         }
 
@@ -975,103 +998,16 @@ internal static class MainWindow
         }
     }
 
-    // -----------------------------------------------------------------------------
-    // Export and self-test
-    // -----------------------------------------------------------------------------
-
-    private static void Export(string what)
-    {
-        if (_cursor is null)
-        {
-            AppendLog("nothing to export yet - press Start and wait for a cursor");
-            return;
-        }
-
-        try
-        {
-            string directory = Path.Combine(AppContext.BaseDirectory, "rattrap-out");
-            Directory.CreateDirectory(directory);
-
-            if (what is "png" or "all")
-            {
-                string path = Path.Combine(directory, "cursor.png");
-                PngWriter.WriteFile(path, _cursor.Image);
-                AppendLog($"wrote {path}");
-            }
-            if (what is "cur" or "all")
-            {
-                string path = Path.Combine(directory, "cursor.cur");
-                CursorFileWriter.WriteCur(path, _cursor);
-                AppendLog($"wrote {path}");
-            }
-            if (what is "ani" or "all")
-            {
-                string path = Path.Combine(directory, "cursor.ani");
-                AniWriter.WriteFile(path, [_cursor]);
-                AppendLog($"wrote {path}");
-            }
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"export failed: {ex.GetType().Name}: {ex.Message}");
-        }
-    }
-
-    private static void RunSelfTestInGui()
-    {
-        try
-        {
-            var lines = new List<string>();
-            lines.AddRange(SelfTest.CoreSelfTest.Run());
-            lines.AddRange(OutputSelfTest.Run());
-
-            int failures = lines.Count(l => l.TrimStart().StartsWith("FAIL", StringComparison.Ordinal));
-            AppendLog($"self-test: {(failures == 0 ? "PASSED" : $"FAILED ({failures})")}");
-            foreach (string line in lines.Where(l => l.TrimStart().StartsWith("FAIL", StringComparison.Ordinal)))
-            {
-                AppendLog("  " + line);
-            }
-
-            User32.MessageBoxW(_frame,
-                failures == 0
-                    ? "Self-test passed."
-                    : $"Self-test failed with {failures} failure(s); see the log.",
-                "rat-trap", User32.MB_OK | User32.MB_ICONINFORMATION | User32.MB_SETFOREGROUND);
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"self-test error: {ex.GetType().Name}: {ex.Message}");
-        }
-    }
-
-    private static void AppendLog(string line)
-    {
-        LogBuilder.AppendLine(line);
-        if (LogBuilder.Length > 32000)
-        {
-            LogBuilder.Remove(0, 8000);
-        }
-
-        if (_log != IntPtr.Zero)
-        {
-            User32.SetWindowTextW(_log, LogBuilder.ToString());
-            User32.SendMessageW(_log, 0x0115, UIntPtr.Zero, IntPtr.Zero); // EM_LINESCROLL to the end
-        }
-    }
-
     private static void Shutdown()
     {
+        if (_frame != IntPtr.Zero && _hotKeyRegistered)
+        {
+            User32.UnregisterHotKey(_frame, HotKeyId);
+            _hotKeyRegistered = false;
+        }
         StopSession();
         ReleaseCanvasDib();
+        _settings.Save();
     }
 }
-
-
-
-
-
-
-
-
-
 

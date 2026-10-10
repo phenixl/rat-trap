@@ -82,6 +82,16 @@ public sealed class DxgiDuplicationSource : ICaptureSource, IPointerShapeProvide
 
     private bool _disposed;
 
+    /// <summary>
+    /// True when the compositor masked this frame because the content is protected.
+    /// </summary>
+    /// <remarks>
+    /// Duplication reports this instead of delivering pixels, and it is worth surfacing rather than
+    /// silently returning a black rectangle: "the output is showing protected content" is a completely
+    /// different problem from "the cursor was not found", and only one of them has a workaround.
+    /// </remarks>
+    public bool LastFrameProtectedContentMasked { get; private set; }
+
     public DxgiDuplicationSource(MonitorDescriptor monitor)
     {
         _monitor = monitor ?? throw new ArgumentNullException(nameof(monitor));
@@ -350,6 +360,8 @@ public sealed class DxgiDuplicationSource : ICaptureSource, IPointerShapeProvide
                 {
                     CapturePointerShape(frameInfo.PointerShapeBufferSize);
                 }
+
+                LastFrameProtectedContentMasked = frameInfo.ProtectedContentMaskedOut != 0;
 
                 if (frameInfo.LastMouseUpdateTime != 0)
                 {
@@ -818,3 +830,4 @@ public sealed class DxgiDuplicationSource : ICaptureSource, IPointerShapeProvide
         }
     }
 }
+

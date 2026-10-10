@@ -33,10 +33,11 @@
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <AssemblyTitle>rat-trap</AssemblyTitle>
     <Product>rat-trap</Product>
-    <Description>Recover cursor bitmaps (with alpha) from continuous screen capture.</Description>
-    <Version>0.1.0</Version>
+    <Description>Recover cursor bitmaps (with colour and alpha) from screen capture: the compositor's own cursor where the OS draws one, and a solved reconstruction where an application draws its own. Exports PNG, .cur and .ani.</Description>
+    <Version>0.2.0</Version>
 
     <!--
       InvariantGlobalization=true comes from Directory.Build.props; no ICU payload.
@@ -49,5 +50,59 @@
     <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
   </PropertyGroup>
 
+  <!--
+    Authenticode signing of the published executable.
+
+    The certificate deliberately lives OUTSIDE the repository, in a folder shared by every project
+    on this machine, so that one private key serves them all and cannot be committed by accident.
+    See tools/sign.ps1 for how the key is located.
+
+    Signing is opt-out rather than opt-in when the certificate is present, because forgetting to
+    sign a release is silent, whereas a developer without the certificate gets one warning line.
+    Override either way:
+      dotnet publish ... -p:SignOutput=false             never sign
+      dotnet publish ... -p:RatTrapSigningDir=D:\certs   use a different certificate folder
+  -->
+  <PropertyGroup>
+    <RatTrapSigningDir Condition="'$(RatTrapSigningDir)' == ''">C:\ai-project\certs</RatTrapSigningDir>
+    <SignOutput Condition="'$(SignOutput)' == '' AND Exists('$(RatTrapSigningDir)\phenixl-codesign.thumbprint.txt')">true</SignOutput>
+  </PropertyGroup>
+
+  <!--
+    Hooked to CopyNativeBinary, and the reason is worth recording because getting it wrong is silent.
+
+    Signing on AfterTargets="Publish" produced a build log reading "Successfully signed" next to a
+    published binary with no signature on it. The cause is in the ILCompiler pack
+    (Microsoft.NETCore.Native.Publish.targets): it defines
+
+        <Target Name="CopyNativeBinary" AfterTargets="Publish">
+          <Delete Files="$(PublishDir)\$(TargetName)$(NativeBinaryExt)" />
+          <Copy SourceFiles="$(NativeOutputPath)$(TargetName)$(NativeBinaryExt)" ... />
+
+    That target is also an AfterTarget of Publish, and because NuGet targets are imported after the
+    project's own, it runs *after* any target the project hooks to Publish - deleting the signed binary
+    and copying the unsigned native one back over it. MSBuild's Copy preserves the source's timestamp,
+    so the file's timestamp did not even move, and the only symptom was a signature that was not there.
+
+    CopyNativeBinary is therefore the last writer, so it is the correct place to hook. Signing is
+    idempotent, and tools/publish.ps1 verifies the result rather than trusting the log.
+  -->
+  <Target Name="SignPublishedExecutable"
+          AfterTargets="CopyNativeBinary"
+          Condition="'$(SignOutput)' == 'true'">
+    <PropertyGroup>
+      <_RatTrapSignTarget>$([System.IO.Path]::GetFullPath('$(PublishDir)$(AssemblyName).exe'))</_RatTrapSignTarget>
+    </PropertyGroup>
+    <Message Importance="high" Text="Signing $(_RatTrapSignTarget)" Condition="Exists('$(_RatTrapSignTarget)')" />
+    <!-- Best effort: an unsigned build is still a usable build, so a failure warns loudly rather than
+         stopping the pipeline. Pass -Require to tools/sign.ps1 instead if a release must never ship
+         unsigned, or use tools/publish.ps1, which verifies the signature afterwards. -->
+    <Exec Command="pwsh -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\tools\sign.ps1&quot; -Path &quot;$(_RatTrapSignTarget)&quot; -CertDir &quot;$(RatTrapSigningDir)&quot; -Description &quot;rat-trap cursor recovery&quot; -Quiet"
+          Condition="Exists('$(_RatTrapSignTarget)')"
+          ContinueOnError="WarnAndContinue" />
+  </Target>
+
 </Project>
+
+
 

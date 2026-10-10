@@ -1,5 +1,7 @@
 # Measured behaviour of cursor capture on this machine
 
+[**English**](measured-behaviour.md) | [中文](measured-behaviour.zh-CN.md)
+
 This file records what was **measured**, not what is documented or assumed. Every claim
 below is backed by an artefact produced by `rattrap probe` or by the earlier C++ probes in
 `probe/`. Where a documented behaviour was assumed and turned out to be wrong, that is
@@ -214,3 +216,41 @@ on this machine can only be established against the file **bytes**, which is wha
 * **Concurrent duplicators** (e.g. OBS display capture running at the same time) were not
   exercised; the per-output duplication limit is handled as a fallible condition with a
   clear diagnostic, not as an assumption.
+
+## 11. Corrections forced by the second round of work
+
+### 11.1 `%TEMP%` is not a safe assumption for scratch files
+
+Under a confined environment (the DSH file sandbox in `workspace-write` mode, and by extension any similar
+policy) a child process is refused writes to `%TEMP%` while the program directory is writable. Measured:
+`rattrap probe --out %TEMP%\x` exited 2 having written nothing, and the output self-test failed with
+`UnauthorizedAccessException` on its own scratch directory - a failure with nothing to do with the code
+under test. The self-test now probes `%TEMP%`, then the program directory, then the current directory, and
+reports which it used.
+
+### 11.2 The Magnifier does not demote a hardware cursor, and the documentation says so
+
+`MagShowSystemCursor` is documented as showing or hiding the system cursor, with no reference counting and
+no interaction with how the cursor is composited. What the Magnifier does instead is draw the cursor into
+its own window when it has the `MS_SHOWMAGNIFIEDCURSOR` style, which is consistent with this project's own
+earlier probes. The idea that it forces a hardware cursor to become a software cursor is not supported.
+See `docs/fullscreen-capture.md`.
+
+### 11.3 The public API that does include the cursor
+
+`GraphicsCaptureSession.IsCursorCaptureEnabled`, documented as "whether the capture session will include
+the cursor in the captured content", true by default, introduced in Windows 10 2004 (10.0.19041.0). It is
+the composite/background pair whose absence is recorded in §3 above, and it is a documented API rather
+than a hook. Not implemented here - see `docs/fullscreen-capture.md` §4 for what it would take.
+
+### 11.4 Capture protection is not a privilege problem
+
+`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` hides a window from every capture API by design, and the
+documentation is explicit that it "works only when the Desktop Window Manager (DWM) is composing the
+desktop" and is not a security or DRM feature. `GetWindowDisplayAffinity` requires the window to belong to
+the calling process, so another application's affinity cannot be read; the tool detects the symptom
+instead, reporting a flat-colour capture area together with the likely causes.
+
+Screen capture itself is not restricted by integrity level: it reads the composited desktop, which is a
+session object rather than a per-process one, and both backends were verified unelevated. So the project
+does not require administrator.

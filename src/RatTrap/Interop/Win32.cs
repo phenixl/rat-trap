@@ -453,6 +453,66 @@ internal static partial class User32
     [LibraryImport("user32.dll", EntryPoint = "LoadCursorW")]
     public static partial IntPtr LoadCursorW(IntPtr hInstance, IntPtr lpCursorName);
 
+    [LibraryImport("user32.dll", EntryPoint = "LoadIconW")]
+    public static partial IntPtr LoadIconW(IntPtr hInstance, IntPtr lpIconName);
+
+    /// <summary>
+    /// The resource id that .NET's <c>ApplicationIcon</c> embeds the application icon under: it is
+    /// <c>IDI_APPLICATION</c>, so loading this id returns this program's own icon rather than the
+    /// generic system one.
+    /// </summary>
+    public static readonly IntPtr IDI_APPLICATION = new(32512);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowRect")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [LibraryImport("user32.dll", EntryPoint = "IsWindowVisible")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool IsWindowVisible(IntPtr hWnd);
+
+    [LibraryImport("user32.dll", EntryPoint = "IsIconic")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool IsIconic(IntPtr hWnd);
+
+    // --- global hot keys ---------------------------------------------------------------
+    [LibraryImport("user32.dll", EntryPoint = "RegisterHotKey")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [LibraryImport("user32.dll", EntryPoint = "UnregisterHotKey")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    public const uint MOD_ALT = 0x0001;
+    public const uint MOD_CONTROL = 0x0002;
+    public const uint MOD_SHIFT = 0x0004;
+    public const uint MOD_WIN = 0x0008;
+    public const uint MOD_NOREPEAT = 0x4000;
+    public const uint WM_HOTKEY = 0x0312;
+
+    // --- shell and sound ---------------------------------------------------------------
+    [LibraryImport("shell32.dll", EntryPoint = "ShellExecuteW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial IntPtr ShellExecuteW(IntPtr hwnd, string? lpOperation, string lpFile,
+        string? lpParameters, string? lpDirectory, int nShowCmd);
+
+    public const int SW_SHOWNORMAL = 1;
+
+    [LibraryImport("winmm.dll", EntryPoint = "PlaySoundW", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool PlaySoundW(string? pszSound, IntPtr hmod, uint fdwSound);
+
+    public const uint SND_ALIAS = 0x00010000;
+    public const uint SND_ASYNC = 0x00000001;
+    public const uint SND_NODEFAULT = 0x00000002;
+    public const uint SND_FILENAME = 0x00020000;
+
+    // --- DWM ---------------------------------------------------------------------------
+    [LibraryImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]
+    public static partial int DwmGetWindowAttribute(IntPtr hwnd, uint dwAttribute, out RECT pvAttribute, uint cbAttribute);
+
+    public const uint DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+
     [LibraryImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
     public static partial IntPtr SetWindowLongPtrW(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
@@ -675,3 +735,4 @@ internal static partial class Winmm
     [LibraryImport("winmm.dll", EntryPoint = "timeEndPeriod")]
     public static partial uint TimeEndPeriod(uint uPeriod);
 }
+

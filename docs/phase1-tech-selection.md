@@ -1,5 +1,19 @@
 # CursorTrap 第一阶段：技术调研与选型报告
 
+> **Note on languages.** This report was written in Chinese in the first research session; there is no
+> English original. It is kept as a historical record of what was chosen and why, and its conclusions are
+> now carried by the current documentation, which exists in both languages: [README](README.md),
+> [docs/algorithm.md](algorithm.md), [docs/measured-behaviour.md](measured-behaviour.md) and
+> [docs/fullscreen-capture.md](fullscreen-capture.md). The `.zh-CN.md` sibling differs only by the language
+> switcher and by internal links pointing at the Chinese documents.
+>
+> **关于语言。** 本报告写于第一轮调研，原文即为中文，没有英文版本。它作为"当时选了什么、为什么"的历史
+> 记录保留，其结论已被当前的双语文档承接：见 [README](README.zh-CN.md)、
+> [docs/algorithm.zh-CN.md](algorithm.zh-CN.md)、
+> [docs/measured-behaviour.zh-CN.md](measured-behaviour.zh-CN.md) 与
+> [docs/fullscreen-capture.zh-CN.md](fullscreen-capture.zh-CN.md)。`.zh-CN.md` 副本仅差语言切换行与指向
+> 中文文档的内部链接。
+
 > 目标：只捕获系统**真实渲染**的光标（含自定义主题、辅助功能放大、DPI 缩放、动画），输出
 > **带 alpha、背景完全透明**的光标图像，供 OBS 等消费方使用。
 >

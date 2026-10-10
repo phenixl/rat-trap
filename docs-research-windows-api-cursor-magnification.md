@@ -1,5 +1,7 @@
 # Windows API doc research — Magnification / Cursor APIs / ANI format
 
+[**English**](docs-research-windows-api-cursor-magnification.md) | [中文](docs-research-windows-api-cursor-magnification.zh-CN.md)
+
 **Deliverable status: BLOCKED — ZERO authoritative pages could be retrieved.**
 No quote in this report is a quote. Every "exact quote" item is marked
 `NOT RETRIEVABLE`. Nothing was paraphrased and passed off as documentation.

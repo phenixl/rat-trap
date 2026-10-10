@@ -1,5 +1,7 @@
 # Recovering a cursor's colour and alpha from screen captures
 
+[**English**](algorithm.md) | [中文](algorithm.zh-CN.md)
+
 This is the derivation behind `src/RatTrap/Reconstruct/`. It records what the method is, why each
 choice was made, which two approaches were discarded and what disqualified them, and — importantly —
 what is provably not recoverable.
@@ -239,3 +241,90 @@ they never needed the background. Only the partially transparent ones are lost.
 * **XOR plus alpha mixtures.** The XOR test and the affine fit are mutually exclusive per pixel. A
   cursor that used both would be classified per region, and a whole-file XOR encoding is only chosen
   when XOR dominates.
+
+## 10. Crosshair mode: a fixed overlay needs a different background
+
+Everything above assumes the cursor moves, which is what lets a per-pixel temporal median find the
+background. A crosshair violates that assumption structurally, not incidentally: it sits at a fixed
+screen position while the scene moves behind it. Every pixel it covers is covered in *every* frame, so the
+temporal window fills entirely with composite values and the median of that window **is** the composite.
+The background model has adopted the very thing it was supposed to see through - §5.1's failure arriving
+by a different route, and one that no amount of extra observation fixes.
+
+The replacement is a second background source, selected by
+`BackgroundSource.SpatialNeighbourMedian`: the median of the pixel's eight neighbours, at two radii, **in
+the same frame**. It works because a crosshair is thin. A few pixels away from any point on its stroke
+there is ordinary scene, and from most points on a stroke most directions leave it - for a pixel on a
+horizontal arm, the two samples along the arm land on it and the other six do not. Two radii rather than
+one so that a stroke of unexpected width still leaves a majority of samples off it.
+
+The sample is only a valid stand-in while the scene is smooth at that scale. The error is the curvature
+term of the scene through the sampling ring, `d^2 * f'' / 2`, which is why the synthetic test uses a
+gentle gradient rather than white noise: with a 9-pixel radius, a scene whose features are ~150 pixels
+across contributes a few levels of error, whereas pixel noise would contribute its full amplitude.
+
+Verified with ground truth: on a scene that changes, a synthetic crosshair comes back with **exact** stroke
+alpha, **exact** stroke colour, a fringe-alpha mean error of 0.004, and **0 false positives** across
+16 019 background pixels. On a scene that does not change, alpha is genuinely unidentified - and the
+answer is still correct for the opaque parts, because an opaque pixel's composite does not depend on what
+is behind it - so the tool answers and says which parts are assumptions rather than refusing.
+
+Two consequences worth stating:
+
+* **The refusal rule differs by mode.** In temporal mode, "the pointer never moved and nothing was solved"
+  is a refusal, because then nothing in the observation carried information. In spatial mode that test
+  cannot apply, because the geometry does not move by design; coverage is instead backed by the direct
+  evidence of a consistent difference from the surrounding scene.
+* **Scene-change detection is disabled in spatial mode.** It exists to invalidate a temporal model whose
+  history describes content that is no longer on screen. In spatial mode there is no history to
+  invalidate, and a busy scene would trip the detector constantly - suppressing pair recording exactly
+  when the scene is giving the solver the most to work with.
+
+## 11. Known limits of crosshair mode
+
+* **A stroke wider than the sampling radius is not recoverable**, because the "background" samples land on
+  the crosshair itself. `crosshairneighbourdistance` is a setting for exactly this reason, and its useful
+  value is bounded by the ROI: at some point the samples leave the square.
+* **The centre of the cross, where the arms meet**, has fewer valid directions than the arms. With
+  sampling in eight directions the diagonals still leave the crosshair, but a shape that is thick in all
+  directions at one point - a filled dot rather than a cross - defeats the method there.
+* **A crosshair that is not at the centre of its window** is not found, since the watch square is
+  positioned by the window rect. Games that offset the crosshair for a weapon's sight picture would need
+  an offset setting.
+* **A window that moves or resizes** restarts the accumulation, because an offset must always refer to the
+  same screen pixel for the statistics to mean anything.
+
+## 12. What crosshair mode still cannot tell apart, and the honest status
+
+The spatial background makes a crosshair solvable, and the synthetic test recovers one exactly. On real
+content it is nevertheless **not yet trustworthy**, and the reason is worth stating precisely because it is
+not a tuning problem.
+
+A crosshair and a stroke of text are the same thing to every test that can be applied to the pixels:
+
+* both are thin, so both differ from a neighbourhood median;
+* both are high-contrast;
+* both are static in screen space if the text is not scrolling, so both are "covered" in every frame.
+
+Three guards were added and each rejects part of the problem, but none of them is the right test:
+
+| Guard | What it rejects | What it misses |
+| --- | --- | --- |
+| Coverage rate ≥ 0.85 | Scene structure that drifts through the watched square | Scene structure that is stationary on screen |
+| Majority of covered pixels' alpha identified | Scene structure over a static background | Scene structure over something that is moving |
+| Refusal when nothing was solved at all | A completely still scene | A scene with one animating pixel |
+
+Measured on a text editor, which contains no crosshair: 193x193 and 193x94 "crosshairs" were produced by
+successive versions, and the third guard above is what finally rejected them in the run that was measured.
+The outcome depends on what is happening on screen, which is exactly the property an unreliable detector
+has.
+
+**The right test is motion**, and it is the one a person uses without thinking: a crosshair is the part of
+the frame that does *not* move while the rest of it does. Text moves with the scene because it *is* the
+scene. Estimating a coarse local motion field over the watched square and keeping only the pixels whose
+motion disagrees with their neighbourhood would replace all three guards above rather than join them.
+
+Until that exists, crosshair mode should be understood as a working demonstration of the solver on a fixed
+overlay rather than a dependable tool, and it is listed as such in `ROADMAP.md`. The alternative that makes
+the question disappear is a Windows.Graphics.Capture backend, which supplies the background directly and
+needs no inference at all.

@@ -67,6 +67,84 @@ public sealed class CursorReconstructor
     private bool _hasHotspot;
     private int _minHotspotX, _minHotspotY, _maxHotspotX, _maxHotspotY;
     private int _clippedObservations;
+    private BackgroundSource _backgroundSource = BackgroundSource.TemporalMedian;
+
+    /// <summary>
+    /// Median of the eight neighbours of a pixel, at two radii, in the same frame.
+    /// </summary>
+    /// <remarks>
+    /// Two radii rather than one so that a stroke of unexpected width still leaves a majority of the
+    /// samples off it. Returns false near the border, where the full set of neighbours does not exist;
+    /// those pixels simply contribute nothing, which is honest - there is no background to read there.
+    /// </remarks>
+    private static bool TryNeighbourMedian(ArgbBitmap pixels, int x, int y, int distance, out ArgbPixel median)
+    {
+        median = ArgbPixel.Transparent;
+        if (distance < 1)
+        {
+            return false;
+        }
+
+        Span<byte> channelB = stackalloc byte[24];
+        Span<byte> channelG = stackalloc byte[24];
+        Span<byte> channelR = stackalloc byte[24];
+        int count = 0;
+
+        for (int ring = 0; ring < 2; ring++)
+        {
+            int radius = distance + (ring * Math.Max(2, distance / 2));
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dy == 0)
+                    {
+                        continue;
+                    }
+                    int nx = x + (dx * radius);
+                    int ny = y + (dy * radius);
+                    if (nx < 0 || ny < 0 || nx >= pixels.Width || ny >= pixels.Height)
+                    {
+                        continue;
+                    }
+                    ArgbPixel sample = pixels.GetPixel(nx, ny);
+                    channelB[count] = sample.B;
+                    channelG[count] = sample.G;
+                    channelR[count] = sample.R;
+                    count++;
+                }
+            }
+        }
+
+        if (count < 5)
+        {
+            return false;
+        }
+
+        median = new ArgbPixel(
+            Median(channelB[..count]),
+            Median(channelG[..count]),
+            Median(channelR[..count]),
+            255);
+        return true;
+    }
+
+    private static byte Median(Span<byte> values)
+    {
+        // Insertion sort; the span is at most 16 entries.
+        for (int i = 1; i < values.Length; i++)
+        {
+            byte key = values[i];
+            int j = i - 1;
+            while (j >= 0 && values[j] > key)
+            {
+                values[j + 1] = values[j];
+                j--;
+            }
+            values[j + 1] = key;
+        }
+        return values[values.Length / 2];
+    }
 
     public CursorReconstructor(ReconstructionOptions? options = null)
     {
@@ -93,6 +171,21 @@ public sealed class CursorReconstructor
     /// <param name="hotspotX">Pointer hotspot X in desktop coordinates for this frame.</param>
     /// <param name="hotspotY">Pointer hotspot Y in desktop coordinates for this frame.</param>
     public void Observe(RECT roi, ArgbBitmap pixels, int hotspotX, int hotspotY)
+        => Observe(roi, pixels, hotspotX, hotspotY, BackgroundSource.TemporalMedian);
+
+    /// <summary>
+    /// Feeds one captured frame, choosing where the background comes from.
+    /// </summary>
+    /// <param name="roi">Where <paramref name="pixels"/> came from, in desktop coordinates.</param>
+    /// <param name="pixels">The captured pixels, which <b>include</b> whatever is being recovered.</param>
+    /// <param name="hotspotX">Pointer hotspot X in desktop coordinates.</param>
+    /// <param name="hotspotY">Pointer hotspot Y in desktop coordinates.</param>
+    /// <param name="source">
+    /// <see cref="BackgroundSource.TemporalMedian"/> for a cursor that moves, or
+    /// <see cref="BackgroundSource.SpatialNeighbourMedian"/> for a crosshair that does not - see the
+    /// remarks on that enum for why the distinction is not a preference.
+    /// </param>
+    public void Observe(RECT roi, ArgbBitmap pixels, int hotspotX, int hotspotY, BackgroundSource source)
     {
         ArgumentNullException.ThrowIfNull(pixels);
         if (roi.Width != pixels.Width || roi.Height != pixels.Height)
@@ -106,11 +199,13 @@ public sealed class CursorReconstructor
         }
 
         _framesObserved++;
+        _backgroundSource = source;
         TrackHotspot(hotspotX, hotspotY);
         EnsureBackground(roi);
 
         BackgroundModel background = _background!;
         int gate = _options.ForegroundGate;
+        int neighbourDistance = _options.NeighbourDistance;
 
         int initialised = 0, backgrounds = 0, foregrounds = 0;
         var pixelsSpan = pixels.Pixels;
@@ -134,9 +229,31 @@ public sealed class CursorReconstructor
                 int rx = screenX - hotspotX;
                 int ry = screenY - hotspotY;
 
-                BackgroundObservation outcome = background.Observe(screenX, screenY, observed, gate,
-                    _options.MinBackgroundSamples, _options.MinBackgroundInlierFraction,
-                    out ArgbPixel backgroundEstimate, out bool backgroundTrustworthy);
+                BackgroundObservation outcome;
+                ArgbPixel backgroundEstimate;
+                bool backgroundTrustworthy;
+
+                if (source == BackgroundSource.SpatialNeighbourMedian)
+                {
+                    // The background is read from the scene around this pixel rather than from this
+                    // pixel's own history, which is what makes a fixed crosshair solvable at all.
+                    if (!TryNeighbourMedian(pixels, x, y, neighbourDistance, out backgroundEstimate))
+                    {
+                        initialised++;
+                        continue;
+                    }
+                    outcome = BackgroundModel.MaxChannelDifference(backgroundEstimate, observed) <= gate
+                        ? BackgroundObservation.Background
+                        : BackgroundObservation.Foreground;
+                    // There is no history to confirm, so there is nothing to be unconfirmed either.
+                    backgroundTrustworthy = true;
+                }
+                else
+                {
+                    outcome = background.Observe(screenX, screenY, observed, gate,
+                        _options.MinBackgroundSamples, _options.MinBackgroundInlierFraction,
+                        out backgroundEstimate, out backgroundTrustworthy);
+                }
 
                 switch (outcome)
                 {
@@ -154,9 +271,9 @@ public sealed class CursorReconstructor
                         break;
                 }
 
-                // Pairs are only recorded once the model has settled after a scene change, and
-                // only from a background estimate that the window has confirmed. Both conditions
-                // exist to keep unverifiable pairs out of the least-squares fit.
+                // Pairs are only recorded once the model has settled after a scene change, and only
+                // from a background estimate the window has confirmed. Both conditions exist to keep
+                // unverifiable pairs out of the least-squares fit.
                 if (outcome == BackgroundObservation.Foreground && _settleFramesRemaining == 0 && backgroundTrustworthy)
                 {
                     if (_offsets.Contains(rx, ry))
@@ -176,7 +293,15 @@ public sealed class CursorReconstructor
 
         _framesAccumulated++;
 
-        DetectSceneChange(background, initialised, backgrounds, foregrounds);
+        // Scene-change detection exists to invalidate a temporal background model whose history
+        // describes content that is no longer on screen. In spatial mode there is no history to
+        // invalidate, and a busy scene would trip the detector constantly - suppressing pair
+        // recording with settle frames precisely when the scene is giving the solver the most to
+        // work with.
+        if (_backgroundSource == BackgroundSource.TemporalMedian)
+        {
+            DetectSceneChange(background, initialised, backgrounds, foregrounds);
+        }
     }
 
     private void TrackHotspot(int hotspotX, int hotspotY)
@@ -270,6 +395,7 @@ public sealed class CursorReconstructor
         _pairsRecorded = 0;
         _hasHotspot = false;
         _clippedObservations = 0;
+        _backgroundSource = BackgroundSource.TemporalMedian;
         _notes.Clear();
         _offsets.Clear();
     }
@@ -339,6 +465,8 @@ public sealed class CursorReconstructor
 
         int transparent = 0, alphaSolved = 0, opaqueAssumed = 0, xorMasked = 0, unresolved = 0;
         double alphaSum = 0;
+        double residualSum = 0, residualWorst = 0;
+        int residualCount = 0;
 
         var models = new PixelModel[width * height];
 
@@ -353,7 +481,16 @@ public sealed class CursorReconstructor
                 switch (model.Kind)
                 {
                     case PixelModelKind.Transparent: transparent++; break;
-                    case PixelModelKind.AlphaSolved: alphaSolved++; alphaSum += model.Alpha; break;
+                    case PixelModelKind.AlphaSolved:
+                        alphaSolved++;
+                        alphaSum += model.Alpha;
+                        if (!double.IsNaN(model.ResidualRms))
+                        {
+                            residualSum += model.ResidualRms;
+                            residualWorst = Math.Max(residualWorst, model.ResidualRms);
+                            residualCount++;
+                        }
+                        break;
                     case PixelModelKind.OpaqueAssumed: opaqueAssumed++; alphaSum += 1; break;
                     case PixelModelKind.XorMasked: xorMasked++; alphaSum += 1; break;
                     default: unresolved++; alphaSum += 1; break;
@@ -398,7 +535,7 @@ public sealed class CursorReconstructor
         // sit in a gap at the centre of the glyph. Availability of information has no such blind spots.
         bool pointerMoved = _minHotspotX != _maxHotspotX || _minHotspotY != _maxHotspotY;
 
-        if (!pointerMoved && alphaSolved == 0)
+        if (_backgroundSource == BackgroundSource.TemporalMedian && !pointerMoved && alphaSolved == 0)
         {
             notes.Add("refused to produce a cursor: the pointer never moved, so no cursor-local offset " +
                       "was ever seen against two different backgrounds, and no pixel's alpha could be " +
@@ -409,6 +546,33 @@ public sealed class CursorReconstructor
                       "because it cannot be told apart from a correct one.");
             return new ReconstructionResult(null,
                 BuildReport(notes, _background.Bounds, transparent, alphaSolved, opaqueAssumed, xorMasked, unresolved));
+        }
+
+        // In crosshair mode the geometry does not move by design, so the test above cannot apply. What
+        // replaces it: the neighbourhood background is only a valid stand-in for the real background if
+        // some pixel's alpha was actually identified against it. If nothing was solved and nothing was
+        // even plausibly opaque, the frame content did not support a reconstruction at all.
+        if (_backgroundSource == BackgroundSource.SpatialNeighbourMedian)
+        {
+            int covered = alphaSolved + opaqueAssumed + unresolved;
+            double solvedFraction = covered == 0 ? 0 : (double)alphaSolved / covered;
+
+            if (alphaSolved == 0 || solvedFraction < _options.MinSpatialSolvedFraction)
+            {
+                notes.Add($"refused to produce a crosshair: only {alphaSolved} of {covered} covered pixels " +
+                          $"({solvedFraction:P0}) had their alpha identified, and at least " +
+                          $"{_options.MinSpatialSolvedFraction:P0} is required.");
+                notes.Add("That fraction is the test that separates a fixed overlay from ordinary scene " +
+                          "structure. Both are thin and both differ from their surroundings, and a static " +
+                          "region passes every other check - a wall of text was measured doing exactly that, " +
+                          "and was reported as a 193x193 crosshair by an earlier version. What scene " +
+                          "structure lacks is a varying background underneath it, so its pixels come back " +
+                          "assumed-opaque instead of solved.");
+                notes.Add("Aim at something that moves so the scene changes beneath the crosshair itself, then " +
+                          "run again.");
+                return new ReconstructionResult(null,
+                    BuildReport(notes, _background.Bounds, transparent, alphaSolved, opaqueAssumed, xorMasked, unresolved));
+            }
         }
 
         // Halo suppression: RGB under fully transparent pixels is meaningless for viewing but
@@ -429,6 +593,11 @@ public sealed class CursorReconstructor
         };
 
         notes.Add($"mean alpha of covered pixels = {alphaSum / Math.Max(1, alphaSolved + opaqueAssumed + xorMasked + unresolved):F3}");
+        if (residualCount > 0)
+        {
+            notes.Add($"affine fit residual of solved pixels: mean {residualSum / residualCount:F2}, " +
+                      $"worst {residualWorst:F2} levels over {residualCount} pixels");
+        }
         if (xorDominant)
         {
             notes.Add("a majority of covered pixels are XOR-composited, so the cursor is written with " +
@@ -471,7 +640,13 @@ public sealed class CursorReconstructor
         {
             return false;
         }
-        return (double)cell.Pairs / total >= _options.MinCoverageRate;
+
+        // A fixed overlay is present in nearly every frame; scene structure that merely resembles one is
+        // not. See MinSpatialCoverageRate.
+        double required = _backgroundSource == BackgroundSource.SpatialNeighbourMedian
+            ? _options.MinSpatialCoverageRate
+            : _options.MinCoverageRate;
+        return (double)cell.Pairs / total >= required;
     }
 
     /// <summary>
@@ -582,7 +757,10 @@ public sealed class CursorReconstructor
             // Confidence from the residual of the affine fit: a well-modelled pixel has
             // essentially zero residual, a misaligned or animated one does not.
             double confidence = Math.Clamp(1.0 - (residualRms / 12.0), 0, 1);
-            return new PixelModel(PixelModelKind.AlphaSolved, clampedAlpha, new ArgbPixel(c0, c1, c2, 255), confidence);
+            return new PixelModel(PixelModelKind.AlphaSolved, clampedAlpha, new ArgbPixel(c0, c1, c2, 255), confidence)
+            {
+                ResidualRms = residualRms,
+            };
         }
 
         if (compositeVariance <= _options.MaxOpaqueVariance)
@@ -692,4 +870,10 @@ public sealed class CursorReconstructor
             Notes = notes,
         };
 }
+
+
+
+
+
+
 
