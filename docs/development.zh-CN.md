@@ -22,7 +22,7 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 在添加一个依赖之前，这些后果值得了解：
 
 * 每个 Win32 调用都用 `[LibraryImport]`，绝不用带运行时封送（runtime marshalling）的 `[DllImport]`。
-* DXGI 和 D3D11 用手写的 COM vtable 调用，因为 AOT 下没有内置的 COM interop（见 `docs/algorithm.md` 以及 `src/RatTrap/Interop/DxgiInterop.cs` 顶部的审计表）。
+* DXGI 和 D3D11 用手写的 COM vtable 调用，因为 AOT 下没有内置的 COM interop（见 `docs/algorithm.zh-CN.md` 以及 `src/RatTrap/Interop/DxgiInterop.cs` 顶部的审计表）。
 * 不用 `System.Text.Json`；设置是一个手工解析的 INI 文件。
 * 不用 WinForms、不用 WPF，它们与 AOT 不兼容。GUI 是原生 Win32。
 
@@ -126,4 +126,5 @@ python tools\verify_cursor_output.py out\      # 对各文件格式的独立重�
 ```
 
 `tools/verify_cursor_output.py` 是必须保留的那个。它与程序本身、以及程序的自检都不共享代码，所以一个在写出器和它自己的往返解析器之间一致的 bug 依然会被暴露出来。正是它确立了：`.cur` 的 XOR 平面与 PNG 的 RGBA 逐字节相等。
+
 

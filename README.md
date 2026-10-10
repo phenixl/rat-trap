@@ -190,7 +190,9 @@ docs/             Algorithm, measured behaviour, fullscreen capture, development
 probe/            The original C++ probes this started from, and their text logs as evidence
 ```
 
-Every document exists in English as `NAME.md` and in Chinese as `NAME.zh-CN.md`.
+Every document exists in English as `NAME.md` and in Chinese as `NAME.zh-CN.md`. Inside a Chinese document,
+a reference to another document means the Chinese edition of it, so cross-references carry the `.zh-CN`
+suffix; source paths and URLs are never rewritten.
 
 ## Licence and intended use
 
@@ -199,3 +201,4 @@ who runs it, and writes image files. It does not inject input, does not hook or 
 does not hide itself, does not persist, and does not attempt to defeat any protection; it will simply
 fail on DRM-protected or capture-protected content, and say why. Use it on machines you are authorised to
 inspect.
+
