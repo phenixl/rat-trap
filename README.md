@@ -73,7 +73,7 @@ covered in [docs/development.md](docs/development.md).
 | `rattrap gui` | The interactive window (default with no arguments). |
 | `rattrap capture` | Acquire a cursor and write `.cur`, `.png` and `.ani`. |
 | `rattrap probe` | Inspect monitors, the live cursor, Desktop Duplication and the interop layer. Also runs the GDI-vs-DXGI comparison that established the behaviour above. |
-| `rattrap selftest` | 111 deterministic checks: interop structure sizes and vtable slot arithmetic, the reconstruction mathematics against synthetic ground truth, and the PNG/CUR/ICO/ANI writers. |
+| `rattrap selftest` | 121 deterministic checks: interop structure sizes and vtable slot arithmetic, the reconstruction mathematics against synthetic ground truth, and the PNG/CUR/ICO/ANI writers. |
 | `rattrap help` | Options. |
 
 ## The window
@@ -83,10 +83,12 @@ covered in [docs/development.md](docs/development.md).
 | **Target: Cursor / Crosshair** | Radio pair. `Cursor` follows the pointer. `Crosshair` watches a fixed square (256 px by default) at the centre of the foreground window — for a first-person shooter, where the crosshair does not move and the scene moves behind it. |
 | **Start / Stop** | One button whose label states what pressing it does next. |
 | **Open folder** | Opens the save directory in Explorer. |
-| **Self-test** | Runs the same 111 checks the command line does. |
+| **Crosshair width (px)** | The side of the square crosshair mode watches, 32-1024, saved as you leave the field. It is fixed for the duration of a capture - the accumulator is keyed to the region - so a change made while running takes effect on the next Start. |
 | **Observe...** | Opens a floating observation window showing the reconstruction in progress: three panels side by side, plus a transport to pause, step one frame either way and jump to either end. The window is owned by the main window, so it floats above it and closes with it, while still being draggable to another monitor. Pausing freezes the view; the capture keeps recording. |
 | **Global hot key** | `Ctrl+Insert` by default, changeable in `rat-trap.ini`. Works while a game has focus, which is the point: pressing it does not steal focus from the game. |
 | Log | Each new line is appended and scrolled into view. |
+
+The `Self-test` button still exists in the window but is deliberately hidden: it runs the same checks as `rattrap selftest`, which prints a report and can be scripted, so from a user's side it was a control whose purpose could not be guessed. Bringing it back is removing one word from its creation in `MainWindow.cs`, and a self-check run still exercises the code path behind it.
 
 A capture saves itself. There is no export button, because a cursor that has been acquired and had its
 alpha separated is finished work, and asking the user to press three more buttons is three chances to
@@ -117,7 +119,7 @@ trim = false
 nudgepointer = true
 
 [crosshair]
-crosshairsize = 256
+crosshairsize = 256   ; also editable in the window, next to the hot key line
 crosshairneighbourdistance = 9
 
 [hotkey]

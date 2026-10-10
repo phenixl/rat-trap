@@ -43,6 +43,8 @@ internal static class MainWindow
     private const int IdLog = 1220;
     private const int IdSaveDir = 1230;
     private const int IdHotKeyInfo = 1231;
+    private const int IdCrosshairLabel = 1232;
+    private const int IdCrosshairSize = 1233;
 
     private const uint CaptureTimerId = 1;
     private const uint SelfCheckTimerId = 2;
@@ -202,7 +204,7 @@ internal static class MainWindow
         [
             ("Start/Stop", IdToggle),
             ("Open folder", IdBrowse),
-            ("Self-test", IdSelfTest),
+            ("Observe...", IdObserve),
             ("Target:", IdModeLabel),
             ("Cursor", IdModeCursor),
             ("Crosshair", IdModeCrosshair),
@@ -227,7 +229,7 @@ internal static class MainWindow
         // >= rather than >, and the first run of this check is why: the label's box ends exactly where the
         // Cursor radio begins, which is adjacent and correct, and a strict comparison called it a failure.
         // Overlap is what must not happen; touching is what a horizontal row looks like.
-        bool radiosRightOfButtons = found["Target:"].Left >= found["Self-test"].Right &&
+        bool radiosRightOfButtons = found["Target:"].Left >= found["Observe..."].Right &&
                                     found["Cursor"].Left >= found["Target:"].Right &&
                                     found["Crosshair"].Left >= found["Cursor"].Right;
         bool horizontal = found["Cursor"].Left != found["Crosshair"].Left;
@@ -237,7 +239,21 @@ internal static class MainWindow
         SelfCheckLog.AppendLine($"layout: radios right of the buttons  : {radiosRightOfButtons}");
         SelfCheckLog.AppendLine($"layout: radios side by side          : {horizontal}");
 
-        bool ok = oneRow && radiosLevel && radiosRightOfButtons && horizontal;
+        // The Self-test button is kept but hidden, so the property to assert is that it is invisible and that
+        // hiding it did not leave a hole where it used to sit.
+        IntPtr selfTest = User32.GetDlgItem(_frame, IdSelfTest);
+        bool selfTestHidden = selfTest != IntPtr.Zero && !User32.IsWindowVisible(selfTest);
+        SelfCheckLog.AppendLine($"layout: Self-test exists but is hidden : {selfTestHidden}");
+
+        // No hole: the control after where Self-test used to be must start where Self-test ended.
+        IntPtr browse = User32.GetDlgItem(_frame, IdBrowse);
+        User32.GetWindowRect(browse, out RECT browseRect);
+        bool noGap = found["Observe..."].Left - browseRect.Right <= 12;
+        SelfCheckLog.AppendLine($"layout: no hole left by the hidden button : {noGap}");
+
+        bool fieldWorks = CheckCrosshairField();
+        bool ok = oneRow && radiosLevel && radiosRightOfButtons && horizontal && selfTestHidden && noGap &&
+                  fieldWorks;
         if (!ok)
         {
             SelfCheckLog.AppendLine("layout: FAIL - the target radios are not laid out horizontally on the button row");
@@ -413,7 +429,9 @@ internal static class MainWindow
                     return IntPtr.Zero;
 
                 case User32.WM_COMMAND:
-                    OnCommand((int)(wParam.ToUInt64() & 0xFFFF));
+                    // The high word carries the notification code, which is the only way to tell an EDIT that
+                    // has lost focus from a BUTTON that was clicked.
+                    OnCommand((int)(wParam.ToUInt64() & 0xFFFF), (int)((wParam.ToUInt64() >> 16) & 0xFFFF));
                     return IntPtr.Zero;
 
                 case User32.WM_CLOSE:
@@ -475,6 +493,13 @@ internal static class MainWindow
         CreateControl(frame, instance, "STATIC", string.Empty, IdHotKeyInfo,
             User32.WS_CHILD | User32.WS_VISIBLE | User32.SS_LEFT);
 
+        // The one setting with no other home. ES_NUMBER keeps the field to digits, so the only invalid input it
+        // can hold is nothing at all.
+        CreateControl(frame, instance, "STATIC", "Crosshair width (px):", IdCrosshairLabel,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.SS_LEFT);
+        CreateControl(frame, instance, "EDIT", string.Empty, IdCrosshairSize,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.WS_BORDER | User32.ES_NUMBER);
+
         // One toggle instead of a Start/Stop pair, "Open folder" instead of a browse dialog, and no
         // per-format export buttons: every format is written automatically the moment a cursor exists,
         // so a button for each one was three chances to lose the result.
@@ -482,8 +507,12 @@ internal static class MainWindow
             User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.BS_PUSHBUTTON);
         CreateControl(frame, instance, "BUTTON", "Open folder", IdBrowse,
             User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.BS_PUSHBUTTON);
+        // Deliberately NOT WS_VISIBLE. The button runs the same checks as `rattrap selftest`, which prints a
+        // report and can be scripted, so from a user's side it was a control whose purpose could not be guessed.
+        // It stays created and routed, so the GUI self-check still exercises the code path it belongs to, and
+        // restoring it is a one-word change here.
         CreateControl(frame, instance, "BUTTON", "Self-test", IdSelfTest,
-            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.BS_PUSHBUTTON);
+            User32.WS_CHILD | User32.WS_TABSTOP | User32.BS_PUSHBUTTON);
 
         // The only addition to the v1.0 layout: a way to open the floating observation window.
         CreateControl(frame, instance, "BUTTON", "Observe...", IdObserve,
@@ -492,7 +521,8 @@ internal static class MainWindow
         if (_font != IntPtr.Zero)
         {
             foreach (int id in new[] { IdModeLabel, IdModeCursor, IdModeCrosshair, IdToggle, IdBrowse,
-                                       IdSelfTest, IdObserve, IdLog, IdSaveDir, IdHotKeyInfo })
+                                       IdSelfTest, IdObserve, IdLog, IdSaveDir, IdHotKeyInfo,
+                                       IdCrosshairLabel, IdCrosshairSize })
             {
                 User32.SendMessageW(User32.GetDlgItem(frame, id), User32.WM_SETFONT,
                     (UIntPtr)(ulong)_font, new IntPtr(1));
@@ -500,6 +530,7 @@ internal static class MainWindow
         }
 
         CheckRadio(_settings.Target == CaptureTarget.Crosshair ? IdModeCrosshair : IdModeCursor);
+        SetCrosshairSizeField(_settings.CrosshairSize);
         SetText(IdSaveDir, $"Saving to {_settings.ResolveSaveDirectory()}");
         SetText(IdHotKeyInfo, _settings.HotKeyEnabled
             ? $"Hot key: {_settings.HotKey}"
@@ -569,7 +600,15 @@ internal static class MainWindow
         int top = gap;
         int infoWidth = Math.Max(80, client.Width - (gap * 2));
         Move(IdSaveDir, gap, top, infoWidth, rowHeight);
-        Move(IdHotKeyInfo, gap, top + rowHeight, infoWidth, rowHeight);
+        // The second information row also carries the crosshair width, which is the only setting that had no
+        // home in the interface. It reuses space that was already reserved and mostly empty.
+        int secondRow = top + rowHeight;
+        int hotKeyWidth = 260 * scale;
+        Move(IdHotKeyInfo, gap, secondRow, hotKeyWidth, rowHeight);
+        int labelLeft = gap + hotKeyWidth + (gap * 2);
+        int labelWidth = 132 * scale;
+        Move(IdCrosshairLabel, labelLeft, secondRow, labelWidth, rowHeight);
+        Move(IdCrosshairSize, labelLeft + labelWidth, secondRow, 72 * scale, rowHeight);
 
         int bottom = buttonHeight + (gap * 2);
         int contentTop = top + (rowHeight * 2) + gap;
@@ -582,7 +621,7 @@ internal static class MainWindow
 
         int y = client.Height - buttonHeight - gap;
         int x = gap;
-        foreach ((int id, int width) in new[] { (IdToggle, 100), (IdBrowse, 110), (IdSelfTest, 90), (IdObserve, 104) })
+        foreach ((int id, int width) in new[] { (IdToggle, 100), (IdBrowse, 110), (IdObserve, 104) })
         {
             Move(id, x, y, width * scale, buttonHeight);
             x += (width * scale) + gap;
@@ -685,6 +724,102 @@ internal static class MainWindow
             DumpChildren(child, depth + 1);
         }
     }
+    /// <summary>
+    /// Reads the crosshair width field and applies it, committing on focus loss and before a capture starts.
+    /// </summary>
+    /// <remarks>
+    /// The square's size is fixed when a session starts, because the accumulator is keyed to the region and
+    /// resizing it mid-run would mean the offset space silently changing shape. So a change made during a
+    /// capture is stored and reported as taking effect on the next Start, rather than appearing to do nothing.
+    /// </remarks>
+    private static void CommitCrosshairSize()
+    {
+        IntPtr edit = User32.GetDlgItem(_frame, IdCrosshairSize);
+        if (edit == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var buffer = new char[16];
+        int length = User32.GetWindowTextW(edit, buffer, buffer.Length);
+        string text = new string(buffer, 0, Math.Clamp(length, 0, buffer.Length)).Trim();
+
+        if (!int.TryParse(text, out int parsed))
+        {
+            // ES_NUMBER keeps the field to digits, so the only invalid input a person can produce is nothing at
+            // all - worth saying plainly rather than quoting an empty string back at them.
+            AppendLog(text.Length == 0
+                ? $"the crosshair width field was left empty; keeping {_settings.CrosshairSize} px"
+                : $"crosshair width '{text}' is not a number; keeping {_settings.CrosshairSize} px");
+            SetCrosshairSizeField(_settings.CrosshairSize);
+            return;
+        }
+
+        int clamped = Math.Clamp(parsed, 32, 1024);
+        if (clamped != parsed)
+        {
+            AppendLog($"crosshair width {parsed} px is outside 32..1024; using {clamped} px");
+        }
+        SetCrosshairSizeField(clamped);
+
+        if (clamped == _settings.CrosshairSize)
+        {
+            return;
+        }
+
+        _settings.CrosshairSize = clamped;
+        _settings.Save();
+        AppendLog(_session?.IsRunning == true
+            ? $"crosshair width set to {clamped} px; the square is fixed for the running capture, so it " +
+              $"applies on the next Start"
+            : $"crosshair width set to {clamped} px, saved to {_settings.FilePath}");
+    }
+
+    /// <summary>Puts a value into the width field without going through the user.</summary>
+    private static void SetCrosshairSizeField(int size)
+    {
+        IntPtr edit = User32.GetDlgItem(_frame, IdCrosshairSize);
+        if (edit != IntPtr.Zero)
+        {
+            User32.SetWindowTextW(edit, size.ToString());
+        }
+    }
+    /// <summary>
+    /// Drives the crosshair width field the way a person would and checks it reaches the setting.
+    /// </summary>
+    /// <remarks>
+    /// Worth testing through the control rather than by assigning the property, because the part that can break
+    /// is the wiring: the notification code arriving in the right half of the message, the text being read back,
+    /// the clamp and the write-back into the field. The user's own value is restored and saved afterwards, so a
+    /// self-check run does not leave the configuration changed.
+    /// </remarks>
+    private static bool CheckCrosshairField()
+    {
+        int original = _settings.CrosshairSize;
+        bool ok = true;
+
+        User32.SetWindowTextW(User32.GetDlgItem(_frame, IdCrosshairSize), "400");
+        CommitCrosshairSize();
+        ok &= _settings.CrosshairSize == 400;
+        SelfCheckLog.AppendLine($"crosshair field: typed 400 -> setting {_settings.CrosshairSize} {Mark(ok)}");
+
+        User32.SetWindowTextW(User32.GetDlgItem(_frame, IdCrosshairSize), "5000");
+        CommitCrosshairSize();
+        ok &= _settings.CrosshairSize == 1024;
+        SelfCheckLog.AppendLine($"crosshair field: typed 5000 -> clamped to {_settings.CrosshairSize} {Mark(ok)}");
+
+        User32.SetWindowTextW(User32.GetDlgItem(_frame, IdCrosshairSize), "nonsense");
+        CommitCrosshairSize();
+        ok &= _settings.CrosshairSize == 1024;
+        SelfCheckLog.AppendLine($"crosshair field: typed nonsense -> kept {_settings.CrosshairSize} {Mark(ok)}");
+
+        _settings.CrosshairSize = original;
+        SetCrosshairSizeField(original);
+        _settings.Save();
+        return ok;
+    }
+
+    private static string Mark(bool ok) => ok ? "ok" : "FAIL";
     private static void SetText(int id, string text)
     {
         IntPtr control = User32.GetDlgItem(_frame, id);
@@ -698,7 +833,7 @@ internal static class MainWindow
     // Commands
     // -----------------------------------------------------------------------------
 
-    private static void OnCommand(int id)
+    private static void OnCommand(int id, int notification)
     {
         switch (id)
         {
@@ -712,6 +847,14 @@ internal static class MainWindow
                 _settings.Save();
                 CheckRadio(id);
                 AppendLog($"target set to {_settings.Target}; settings saved to {_settings.FilePath}");
+                break;
+
+            case IdCrosshairSize:
+                // Committed when the field loses focus, which is the moment a person considers the value final.
+                if (notification == User32.EN_KILLFOCUS)
+                {
+                    CommitCrosshairSize();
+                }
                 break;
 
             case IdBrowse:
@@ -749,6 +892,11 @@ internal static class MainWindow
         _sessionFailed = false;
         _cursor = null;
         _session?.Dispose();
+        // Read before the session is built, because the square's size is baked into it. Doing it here as well as
+        // on focus loss means the field is authoritative even when it never lost focus - pressing Start straight
+        // after typing must use what was typed.
+        CommitCrosshairSize();
+
         _session = new CaptureSession(_settings, AppendLog);
         ObservationWindow.Attach(_session);
         _session.Start();

@@ -59,7 +59,7 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 | `rattrap gui` | 交互式窗口（不带参数时的默认行为）。 |
 | `rattrap capture` | 获取一个光标并写出 `.cur`、`.png` 和 `.ani`。 |
 | `rattrap probe` | 检查显示器、实时光标、Desktop Duplication 以及 interop 层。同时运行那个确立了上述行为的 GDI 与 DXGI 对比。 |
-| `rattrap selftest` | 111 项确定性检查：interop 结构体大小与 vtable 槽位算术、用合成真值（synthetic ground truth）验证重建数学，以及 PNG/CUR/ICO/ANI 写出器。 |
+| `rattrap selftest` | 121 项确定性检查：interop 结构体大小与 vtable 槽位算术、用合成真值（synthetic ground truth）验证重建数学，以及 PNG/CUR/ICO/ANI 写出器。 |
 | `rattrap help` | 选项说明。 |
 
 ## 窗口
@@ -69,10 +69,12 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 | **Target: Cursor / Crosshair** | 一对单选按钮。`Cursor` 跟随指针。`Crosshair` 观察前台窗口中心的一个固定方块（默认 256 px）——对第一人称射击游戏而言，准星不动，动的是它背后的场景。 |
 | **Start / Stop** | 单个按钮，它的标签说明了按下之后接下来会发生什么。 |
 | **Open folder** | 在资源管理器中打开保存目录。 |
-| **Self-test** | 运行与命令行相同的 111 项检查。 |
+| **Crosshair width (px)** | 准星模式所观察方块的边长，32–1024，离开输入框时即保存。捕获进行中该值固定（累加器以该区域为键），因此运行中修改会在下次 Start 时生效。 |
 | **Observe...** | 打开一个浮动的观察窗口：三格面板平排展示正在进行的重建，另有传输条可暂停、前后单步、跳到两端。该窗口由主窗口拥有，因此浮在它之上并随它一起关闭，同时仍可拖到另一个显示器。暂停只冻结**画面**，捕获仍在录制。 |
 | **Global hot key** | 默认 `Ctrl+Insert`，可在 `rat-trap.ini` 中修改。在游戏持有焦点时依然有效，而这正是关键：按下它不会把焦点从游戏里抢走。 |
 | Log | 每一条新日志被追加并滚动到可见位置。 |
+
+`Self-test` 按钮仍然存在于窗口中，但被**有意隐藏**：它运行的是与 `rattrap selftest` 相同的检查，而后者会打印报告、也可以脚本化调用，所以从用户角度看它只是一个猜不出用途的控件。要恢复它，只需在其创建处去掉一个词；自检运行仍然会走到它背后的代码路径。
 
 捕获会自动保存自己。这里没有导出按钮，因为一个已经获取、并且已经分离出 alpha 的光标就是完成态的工作，而要求用户再按三个按钮，就是三次弄丢它的机会。文件命名为 `[hotspotX,hotspotY]_NNNN`，所以重新运行绝不会覆盖先前的捕获；完成提示音使用的是系统的 "new fax notification" 事件（`FaxBeep`），因此它会遵循该机器所用的任何声音方案。
 
@@ -96,7 +98,7 @@ trim = false
 nudgepointer = true
 
 [crosshair]
-crosshairsize = 256
+crosshairsize = 256   ; 也可在窗口中"热键"那一行右侧直接编辑
 crosshairneighbourdistance = 9
 
 [hotkey]

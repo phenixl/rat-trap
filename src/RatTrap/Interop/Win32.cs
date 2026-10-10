@@ -594,6 +594,12 @@ internal static partial class User32
     public const uint ES_MULTILINE = 0x0004;
     public const uint ES_AUTOVSCROLL = 0x0040;
     public const uint ES_READONLY = 0x0800;
+    public const uint ES_NUMBER = 0x2000;
+
+    /// <summary>Sent to the parent after a command control has been used, in the high word of wParam.</summary>
+    public const uint EN_SETFOCUS = 0x0100;
+    public const uint EN_KILLFOCUS = 0x0200;
+    public const uint EN_CHANGE = 0x0300;
     public const uint CW_USEDEFAULT = 0x80000000;
     public const uint MB_OK = 0x00000000;
     public const uint MB_ICONERROR = 0x00000010;
