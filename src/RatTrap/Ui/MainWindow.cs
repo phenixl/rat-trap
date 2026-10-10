@@ -275,7 +275,7 @@ internal static class MainWindow
         int width = (int)(1180 * dpi / 96.0);
         int height = (int)(760 * dpi / 96.0);
 
-        _frame = User32.CreateWindowExW(0, "RatTrapFrame", "rat-trap - cursor and crosshair recovery",
+        _frame = User32.CreateWindowExW(0, "RatTrapFrame", $"rat-trap {Program.VersionText} - cursor and crosshair recovery",
             User32.WS_OVERLAPPEDWINDOW, 80, 60, width, height, IntPtr.Zero, IntPtr.Zero, instance, IntPtr.Zero);
         if (_frame == IntPtr.Zero)
         {
@@ -1095,6 +1095,7 @@ internal static class MainWindow
         _settings.Save();
     }
 }
+
 
 
 

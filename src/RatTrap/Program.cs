@@ -8,7 +8,24 @@ namespace RatTrap;
 /// </summary>
 internal static class Program
 {
-    private const string Version = "0.1.0";
+    /// <summary>
+    /// The version, read from the assembly rather than written here again.
+    /// </summary>
+    /// <remarks>
+    /// It used to be a literal, and by the time this reached 1.0 the literal and the project file
+    /// disagreed - the command line reported 0.1.0 while the assembly said 0.2.0, so "which build is this"
+    /// had two answers depending on how it was asked. One source, in the project file, and the value is
+    /// read back.
+    /// <para>
+    /// <see cref="Assembly.GetName"/> rather than <c>GetCustomAttribute</c>: the latter needs the attribute
+    /// to survive trimming, which is exactly the kind of thing that works in a JIT build and not in the
+    /// Native AOT build that ships. The assembly name is always present.
+    /// </para>
+    /// </remarks>
+    internal static string VersionText =>
+        typeof(Program).Assembly.GetName().Version is { } version
+            ? $"{version.Major}.{version.Minor}.{version.Build}"
+            : "unknown";
 
     private static int Main(string[] args)
     {
@@ -102,14 +119,14 @@ internal static class Program
 
     private static int Version0()
     {
-        Console.WriteLine($"rat-trap {Version}");
+        Console.WriteLine($"rat-trap {VersionText}");
         return 0;
     }
 
     private static int Help()
     {
         Console.WriteLine($"""
-            rat-trap {Version} - recover cursor bitmaps (with alpha) from screen capture
+            rat-trap {VersionText} - recover cursor bitmaps (with alpha) from screen capture
 
             USAGE
               rattrap [command] [options]
@@ -159,6 +176,7 @@ internal static class Program
         return 0;
     }
 }
+
 
 
 
