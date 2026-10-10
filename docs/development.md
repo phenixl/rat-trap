@@ -62,27 +62,48 @@ program directory, then the current directory, and reports which one it used.
 
 ## Code signing
 
-The certificate lives **outside** the repository, in a folder shared by every project on this machine:
+The certificate lives **outside** the repository, in a folder shared by every project on this machine. That
+folder is named by the `certs_path` user environment variable, and it is not hard-coded anywhere in this
+repository.
+
+```powershell
+[Environment]::GetEnvironmentVariable('certs_path', 'User')   # where the certificate folder is
+```
 
 ```
-C:\ai-project\certs\
+<the folder certs_path names>\
     phenixl-codesign.pfx              private key, password protected
     phenixl-codesign.pfx.password.txt the password, because a build agent needs it unattended
     phenixl-codesign.cer              public part, for installing as trusted
     phenixl-codesign.thumbprint.txt   what the build reads to find it in the certificate store
 ```
 
+> The path used to be a literal in the project file. When the folder was moved, the literal went stale,
+> and the consequence was not an error: signing silently degraded to a skip, and the only evidence was a
+> single line in a build log. An environment variable is one place to change and cannot drift out of step
+> with the machine. If `certs_path` is unset, the build now says so explicitly rather than quietly
+> producing an unsigned binary.
+
 `tools/sign.ps1` signs a binary, preferring the certificate store by thumbprint (no password needed) and
-falling back to the `.pfx` plus its password, which is what a build agent uses. The `publish` target calls
-it automatically when the certificate is present:
+falling back to the `.pfx` plus its password, which is what a build agent uses. It resolves the certificate
+folder in this order: `-CertDir`, then `certs_path` from the process environment, then `certs_path` from the
+**registry's user scope**. That last step matters more than it looks. An environment variable created after a
+shell was started is absent from that shell, so the terminal or IDE someone already has open will not have
+it — and a build run from there must still sign.
+
+The `publish` target therefore always invokes the script (unless `SignOutput=false`) and lets it decide,
+rather than asking MSBuild whether a certificate exists. MSBuild only sees environment variables that were
+present when its process started, so it cannot answer that question reliably, and a wrong answer is silent.
+A missing certificate produces one visible `SKIPPED` line in the build log:
 
 ```powershell
 dotnet publish ... -p:SignOutput=false             # never sign
-dotnet publish ... -p:RatTrapSigningDir=D:\certs    # different certificate folder
+dotnet publish ... -p:RatTrapSigningDir=D:\certs    # a specific folder, beating certs_path
 ```
 
-Signing is best effort: a missing certificate produces one warning line, not a failed build. Pass
-`-Require` to `tools/sign.ps1` instead when a release must never ship unsigned.
+Signing is best effort: a missing certificate produces that one line, not a failed build. Pass `-Require` to
+`tools/sign.ps1` instead when a release must never ship unsigned — `tools/publish.ps1` is the easier way to be
+sure, since it reads the signature back off the published file.
 
 ### The signing hook, and why it is on `CopyNativeBinary`
 

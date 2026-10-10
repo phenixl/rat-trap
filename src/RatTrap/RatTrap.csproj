@@ -55,17 +55,33 @@
 
     The certificate deliberately lives OUTSIDE the repository, in a folder shared by every project
     on this machine, so that one private key serves them all and cannot be committed by accident.
-    See tools/sign.ps1 for how the key is located.
+    The folder is named by the `certs_path` user environment variable and is NOT hard-coded here.
 
-    Signing is opt-out rather than opt-in when the certificate is present, because forgetting to
-    sign a release is silent, whereas a developer without the certificate gets one warning line.
+    That last point is a correction. The path used to be a literal, and when the folder was moved the
+    literal went stale: signing silently degraded to a skip and the only evidence was one line in a
+    build log. An environment variable is one place to change and cannot drift out of step with the
+    machine.
+
+    Note what is deliberately NOT done here: the build does not decide whether a certificate exists,
+    and it does not require MSBuild to be able to see certs_path. It could not do the latter reliably
+    anyway, since MSBuild only sees environment variables that existed when its process started, and a
+    shell or IDE opened before the variable was created does not have it. Instead the sign target runs
+    and tools/sign.ps1 resolves the folder itself - parameter, then process environment, then the
+    registry's user scope - and reports a skip in the log when there is nothing to sign with. An
+    unsigned release must be visible in the log rather than inferred from the absence of a line.
+
     Override either way:
       dotnet publish ... -p:SignOutput=false             never sign
-      dotnet publish ... -p:RatTrapSigningDir=D:\certs   use a different certificate folder
+      dotnet publish ... -p:RatTrapSigningDir=D:\certs   sign from a specific folder
   -->
   <PropertyGroup>
-    <RatTrapSigningDir Condition="'$(RatTrapSigningDir)' == ''">C:\ai-project\certs</RatTrapSigningDir>
-    <SignOutput Condition="'$(SignOutput)' == '' AND Exists('$(RatTrapSigningDir)\phenixl-codesign.thumbprint.txt')">true</SignOutput>
+    <!-- MSBuild imports environment variables as properties, so $(certs_path) is the variable itself.
+         Property names are case-insensitive, but the exact spelling is used to make the link obvious.
+         This is only a shortcut so the folder travels in the command line; when it is empty, sign.ps1
+         resolves the same variable (plus the registry) for itself. -->
+    <RatTrapSigningDir Condition="'$(RatTrapSigningDir)' == '' AND '$(certs_path)' != ''">$(certs_path)</RatTrapSigningDir>
+    <SignOutput Condition="'$(SignOutput)' == ''">true</SignOutput>
+    <_RatTrapCertDirArg Condition="'$(RatTrapSigningDir)' != ''">-CertDir &quot;$(RatTrapSigningDir)&quot;</_RatTrapCertDirArg>
   </PropertyGroup>
 
   <!--
@@ -95,9 +111,11 @@
     </PropertyGroup>
     <Message Importance="high" Text="Signing $(_RatTrapSignTarget)" Condition="Exists('$(_RatTrapSignTarget)')" />
     <!-- Best effort: an unsigned build is still a usable build, so a failure warns loudly rather than
-         stopping the pipeline. Pass -Require to tools/sign.ps1 instead if a release must never ship
-         unsigned, or use tools/publish.ps1, which verifies the signature afterwards. -->
-    <Exec Command="pwsh -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\tools\sign.ps1&quot; -Path &quot;$(_RatTrapSignTarget)&quot; -CertDir &quot;$(RatTrapSigningDir)&quot; -Description &quot;rat-trap cursor recovery&quot; -Quiet"
+         stopping the pipeline. sign.ps1 prints a SKIPPED line even under -Quiet, because "no certificate"
+         is the one message that must not be suppressed - that silence is what this whole mechanism was
+         changed to remove. Pass -Require to tools/sign.ps1 if a release must never ship unsigned, or use
+         tools/publish.ps1, which reads the signature back off the published file. -->
+    <Exec Command="pwsh -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\tools\sign.ps1&quot; -Path &quot;$(_RatTrapSignTarget)&quot; $(_RatTrapCertDirArg) -Description &quot;rat-trap cursor recovery&quot; -Quiet"
           Condition="Exists('$(_RatTrapSignTarget)')"
           ContinueOnError="WarnAndContinue" />
   </Target>

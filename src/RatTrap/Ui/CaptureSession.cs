@@ -59,7 +59,6 @@ internal sealed class CaptureSession : IDisposable
     private CaptureTarget _activeTarget;
     private MonitorDescriptor? _monitor;
 
-    private bool _nudged;
     private bool _reopened;
     private int _ticks;
     private ulong _lastShapeHash;
@@ -97,7 +96,6 @@ internal sealed class CaptureSession : IDisposable
 
         Cursor = null;
         _ticks = 0;
-        _nudged = false;
         _reopened = false;
         _lastShapeHash = 0;
         _reportedNoShape = false;

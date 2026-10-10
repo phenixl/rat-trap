@@ -44,24 +44,32 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 
 ## 代码签名
 
-证书存放在仓库**之外**，位于这台机器上所有项目共享的一个文件夹里：
+证书存放在仓库**之外**，位于这台机器上所有项目共享的一个文件夹里。该文件夹由用户环境变量 `certs_path` 指定，本仓库中**没有任何地方把它写死**。
+
+```powershell
+[Environment]::GetEnvironmentVariable('certs_path', 'User')   # 证书文件夹在哪里
+```
 
 ```
-C:\ai-project\certs\
+<certs_path 指向的文件夹>\
     phenixl-codesign.pfx              私钥，受密码保护
     phenixl-codesign.pfx.password.txt 密码，因为构建代理需要无人值守地使用它
     phenixl-codesign.cer              公开部分，用于安装为受信任
     phenixl-codesign.thumbprint.txt   构建时读取它，用来在证书存储中找到证书
 ```
 
-`tools/sign.ps1` 为二进制签名，优先按指纹（thumbprint）从证书存储取证书（不需要密码），回退到 `.pfx` 加其密码——构建代理用的就是后者。当证书存在时，`publish` 目标会自动调用它：
+> 这个路径原先是项目文件里的一个字面量。文件夹被移动之后，字面量就失效了，而后果**不是**一个报错：签名静默降级为跳过，唯一的迹象是构建日志里的一行字。环境变量只有一处需要修改，也不会与机器上的实际情况脱节。若 `certs_path` 未设置，构建现在会明确说明，而不是悄悄产出一个未签名的二进制。
+
+`tools/sign.ps1` 为二进制签名，优先按指纹（thumbprint）从证书存储取证书（不需要密码），回退到 `.pfx` 加其密码——构建代理用的就是后者。它按以下顺序解析证书文件夹：`-CertDir`、进程环境里的 `certs_path`、**注册表用户作用域里的 `certs_path`**。最后一步比看上去更重要：在某个 shell 启动**之后**创建的环境变量，不会出现在那个 shell 里，所以别人已经开着的终端或 IDE 是拿不到它的——而从那里发起的构建仍然必须能签名。
+
+因此 `publish` 目标**总是**调用该脚本（除非 `SignOutput=false`），由脚本自己判断，而不是让 MSBuild 去判断证书是否存在。MSBuild 只能看见它自身进程启动时已存在的环境变量，所以它无法可靠地回答这个问题，而答错的后果是静默的。证书缺失会在构建日志里留下一行**可见的** `SKIPPED`：
 
 ```powershell
 dotnet publish ... -p:SignOutput=false             # 从不签名
-dotnet publish ... -p:RatTrapSigningDir=D:\certs    # 使用另一个证书文件夹
+dotnet publish ... -p:RatTrapSigningDir=D:\certs    # 指定文件夹，优先于 certs_path
 ```
 
-签名是尽力而为：证书缺失只会产生一行警告，而不是让构建失败。当一次发布绝不允许以未签名状态出厂时，请改为给 `tools/sign.ps1` 传 `-Require`。
+签名是尽力而为：证书缺失只产生那一行，而不是让构建失败。当一次发布绝不允许以未签名状态出厂时，请改为给 `tools/sign.ps1` 传 `-Require`——更省事的做法是用 `tools/publish.ps1`，它会把签名从发布出来的文件上读回来验证。
 
 ### 签名挂钩为什么挂在 `CopyNativeBinary` 上
 

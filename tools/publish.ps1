@@ -38,6 +38,16 @@ function Step([string] $message) { Write-Host "publish: $message" }
 function Die([string] $message) { Write-Error "publish: $message"; exit 1 }
 
 if (-not $SkipBuild) {
+    # Say what the build will use for signing before it starts, because a missing certificate causes a
+    # skip rather than a failure, and discovering that after the fact is how an unsigned release ships.
+    $certDir = $env:certs_path
+    if (-not $certDir) { $certDir = [Environment]::GetEnvironmentVariable('certs_path', 'User') }
+    if ($certDir) {
+        Step "certificate folder: $certDir (certs_path)"
+    } else {
+        Step 'WARNING: the certs_path user environment variable is not set, so this build will not sign'
+    }
+
     Step "building and publishing $Configuration/$RuntimeIdentifier into $output"
     if (Test-Path $output) { Remove-Item $output -Recurse -Force }
     & dotnet publish $project -c $Configuration -r $RuntimeIdentifier -o $output --nologo
@@ -56,8 +66,9 @@ if ($signature.SignerCertificate) {
     Step "  thumbprint: $($signature.SignerCertificate.Thumbprint)"
     Step "  valid to  : $($signature.SignerCertificate.NotAfter)"
 } else {
-    $message = "the published executable is NOT signed. Run tools\sign.ps1 against it, or check that " +
-               "the certificate is present where RatTrapSigningDir points."
+    $message = "the published executable is NOT signed. The certificate folder comes from the certs_path " +
+               "user environment variable; check that it is set and that it holds " +
+               "phenixl-codesign.thumbprint.txt, or pass -p:RatTrapSigningDir=<folder> to dotnet publish."
     if ($RequireSignature) { Die $message } else { Step "  WARNING: $message" }
 }
 
