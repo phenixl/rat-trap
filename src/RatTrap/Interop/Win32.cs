@@ -502,10 +502,24 @@ internal static partial class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool PlaySoundW(string? pszSound, IntPtr hmod, uint fdwSound);
 
+    /// <summary>
+    /// <see cref="PlaySoundW"/> with <c>SND_MEMORY</c>, where the first argument is a pointer to a WAV image.
+    /// </summary>
+    /// <remarks>
+    /// A separate import rather than an <c>IntPtr</c> overload of the same name, because the source generator
+    /// emits different marshalling for the two and a single entry point cannot serve both. The caller owns
+    /// the buffer and, with <c>SND_ASYNC</c>, must keep it alive until playback finishes.
+    /// </remarks>
+    [LibraryImport("winmm.dll", EntryPoint = "PlaySoundW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool PlaySoundWFromMemory(IntPtr pszSound, IntPtr hmod, uint fdwSound);
+
     public const uint SND_ALIAS = 0x00010000;
     public const uint SND_ASYNC = 0x00000001;
     public const uint SND_NODEFAULT = 0x00000002;
     public const uint SND_FILENAME = 0x00020000;
+    /// <summary>The first argument is a WAV image in memory rather than a name. It must outlive the sound.</summary>
+    public const uint SND_MEMORY = 0x00000004;
 
     // --- DWM ---------------------------------------------------------------------------
     [LibraryImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]

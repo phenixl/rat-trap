@@ -32,7 +32,178 @@ internal static class CoreSelfTest
         CrosshairOnAStaticSceneAssumesAlpha(lines);
         CrosshairRejectsAnIntermittentOverlay(lines);
         MaskPacking(lines);
+        EmbeddedSoundCues(lines);
         return lines;
+    }
+
+    // -----------------------------------------------------------------------------
+    // Feedback cues
+    // -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Checks that the three embedded cues are the sounds they are supposed to be.
+    /// </summary>
+    /// <remarks>
+    /// The requirement is not merely "there are three sounds" but "start and stop are a matched pair and the
+    /// save cue cannot be confused with either", and reading the generator's configuration does not
+    /// demonstrate that. These are the same measurements <c>tools/build_sounds.py --verify</c> makes on the
+    /// same artifact, restated in the language the program is written in, so that a corrupted or truncated
+    /// payload fails the program's own test rather than only the generator's.
+    /// <para>
+    /// Zero-crossing rate stands in for pitch: it counts sign changes, which rise and fall with the dominant
+    /// frequency content and need no transform. Spectral centroid is the energy-weighted mean frequency, and
+    /// it is what makes the save cue measurably darker than the pair.
+    /// </para>
+    /// </remarks>
+    private static void EmbeddedSoundCues(List<string> lines)
+    {
+        string[] names = ["Start", "Stop", "Save"];
+        string[] encoded = [Audio.SoundCues.StartBase64, Audio.SoundCues.StopBase64, Audio.SoundCues.SaveBase64];
+        var rising = new double[names.Length];
+        var falling = new double[names.Length];
+        var centroids = new double[names.Length];
+        var payloads = new byte[names.Length][];
+
+        for (int index = 0; index < names.Length; index++)
+        {
+            byte[] wav;
+            try
+            {
+                wav = Convert.FromBase64String(encoded[index]);
+            }
+            catch (FormatException)
+            {
+                CheckTrue(lines, $"the {names[index]} cue is valid base64", false, "the payload does not decode");
+                return;
+            }
+            payloads[index] = wav;
+
+            if (wav.Length < 44 || wav[0] != 'R' || wav[1] != 'I' || wav[2] != 'F' || wav[3] != 'F' ||
+                wav[8] != 'W' || wav[9] != 'A' || wav[10] != 'V' || wav[11] != 'E')
+            {
+                CheckTrue(lines, $"the {names[index]} cue is a RIFF/WAVE image", false, "the header is wrong");
+                return;
+            }
+
+            // Little-endian fields read straight out of the canonical 44-byte PCM header.
+            int channels = wav[22] | (wav[23] << 8);
+            int bits = wav[34] | (wav[35] << 8);
+            int rate = wav[24] | (wav[25] << 8) | (wav[26] << 16) | (wav[27] << 24);
+            int dataLength = wav[40] | (wav[41] << 8) | (wav[42] << 16) | (wav[43] << 24);
+
+            CheckTrue(lines, $"the {names[index]} cue is mono 16-bit PCM",
+                channels == 1 && bits == 16, $"{channels} channels, {bits} bit");
+            CheckTrue(lines, $"the {names[index]} cue is at the expected sample rate",
+                rate == 22050, $"{rate} Hz");
+
+            int samples = Math.Min(dataLength / 2, (wav.Length - 44) / 2);
+            if (samples < 64)
+            {
+                CheckTrue(lines, $"the {names[index]} cue has audio in it", false, $"{samples} samples");
+                return;
+            }
+
+            var mono = new double[samples];
+            for (int i = 0; i < samples; i++)
+            {
+                short value = (short)(wav[44 + (i * 2)] | (wav[44 + (i * 2) + 1] << 8));
+                mono[i] = value / 32768.0;
+            }
+
+            double rms = 0;
+            for (int i = 0; i < samples; i++)
+            {
+                rms += mono[i] * mono[i];
+            }
+            rms = Math.Sqrt(rms / samples);
+            CheckTrue(lines, $"the {names[index]} cue is not silent", rms > 0.01, $"rms {rms:F4}");
+
+            int half = samples / 2;
+            rising[index] = ZeroCrossingRate(mono, 0, half);
+            falling[index] = ZeroCrossingRate(mono, half, samples - half);
+            centroids[index] = SpectralCentroid(mono, rate);
+
+            lines.Add($"  {names[index],-5} {wav.Length,6} bytes  {samples / (double)rate:F3}s  {rate} Hz  " +
+                      $"zcr {rising[index]:F0} -> {falling[index]:F0}  centroid {centroids[index]:F0} Hz");
+        }
+
+        CheckTrue(lines, "the start cue sweeps upward", falling[0] > rising[0],
+            $"zero-crossing rate goes {rising[0]:F0} -> {falling[0]:F0}");
+        CheckTrue(lines, "the stop cue sweeps downward", falling[1] < rising[1],
+            $"zero-crossing rate goes {rising[1]:F0} -> {falling[1]:F0}");
+        CheckTrue(lines, "the save cue is darker than the start/stop pair",
+            centroids[2] < Math.Min(centroids[0], centroids[1]),
+            $"save {centroids[2]:F0} Hz against {centroids[0]:F0} and {centroids[1]:F0} Hz");
+        CheckTrue(lines, "all three cues are distinct",
+            !payloads[0].AsSpan().SequenceEqual(payloads[1]) &&
+            !payloads[1].AsSpan().SequenceEqual(payloads[2]) &&
+            !payloads[0].AsSpan().SequenceEqual(payloads[2]),
+            "two cues are byte-identical");
+    }
+
+    /// <summary>Sign changes per sample across a range, which tracks the dominant frequency content.</summary>
+    private static double ZeroCrossingRate(double[] samples, int start, int count)
+    {
+        if (count <= 1)
+        {
+            return 0;
+        }
+
+        double mean = 0;
+        for (int i = start; i < start + count; i++)
+        {
+            mean += samples[i];
+        }
+        mean /= count;
+
+        int crossings = 0;
+        bool previous = samples[start] - mean >= 0;
+        for (int i = start + 1; i < start + count; i++)
+        {
+            bool current = samples[i] - mean >= 0;
+            if (current != previous)
+            {
+                crossings++;
+            }
+            previous = current;
+        }
+        return crossings / (double)(count - 1);
+    }
+
+    /// <summary>
+    /// Energy-weighted mean frequency, by a fixed-size DFT.
+    /// </summary>
+    /// <remarks>
+    /// A full FFT would be faster, but a cue is a few thousand samples and this runs once, so the
+    /// straightforward correlation is the better trade here: no bit-reversal, no twiddle tables, and nothing
+    /// to get subtly wrong in code whose only job is to check a number.
+    /// </remarks>
+    private static double SpectralCentroid(double[] samples, int rate)
+    {
+        const int Bins = 512;
+        double weighted = 0;
+        double total = 0;
+
+        for (int bin = 1; bin < Bins; bin++)
+        {
+            double omega = Math.PI * bin / Bins;   // 0..pi, that is 0..Nyquist
+            double real = 0;
+            double imaginary = 0;
+            for (int i = 0; i < samples.Length; i++)
+            {
+                // A Hann window, so a short burst does not smear across every bin.
+                double window = 0.5 - (0.5 * Math.Cos(2 * Math.PI * i / (samples.Length - 1)));
+                double angle = omega * i;
+                real += samples[i] * window * Math.Cos(angle);
+                imaginary += samples[i] * window * Math.Sin(angle);
+            }
+
+            double magnitude = Math.Sqrt((real * real) + (imaginary * imaginary));
+            weighted += magnitude * (omega / Math.PI) * (rate / 2.0);
+            total += magnitude;
+        }
+
+        return total > 0 ? weighted / total : 0;
     }
 
     // -----------------------------------------------------------------------------

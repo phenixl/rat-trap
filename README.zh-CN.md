@@ -86,7 +86,11 @@ target = cursor            ; 或者 crosshair
 savedirectory = captures   ; 相对路径基于程序目录解析
 autosave = true
 playsound = true
-soundalias = FaxBeep       ; 一个 Windows 声音方案别名
+; 三段提示音，已编译进程序：开始捕获一段、停止捕获另一段、保存结果第三段。
+; builtin 播放内嵌提示音；其它值会被当作 .wav 文件路径。
+startsound = builtin
+stopsound = builtin
+savesound = builtin
 reconstructseconds = 8
 trim = false
 nudgepointer = true
@@ -151,14 +155,20 @@ src/RatTrap/
   Ui/             Win32 窗口以及它背后的捕获会话
   Cli/            命令行、probe 与 capture 流水线
   SelfTest/       确定性验证
-tools/            独立的 Python 验证器、图标生成器、签名脚本
+  Audio/          三段反馈提示音，以内嵌 WAV 镜像形式存在
+tools/            独立的 Python 验证器、图标生成器、提示音生成器、签名与发布脚本
 docs/             算法、实测行为、全屏捕获、开发笔记
+THIRD-PARTY-NOTICES.md   内嵌反馈提示音的 CC0 许可证与出处
 probe/            本项目起步时所用的原始 C++ 探针，以及作为证据的文本日志
 ```
 
-每份文档都有英文版 `NAME.md` 和中文版 `NAME.zh-CN.md`。中文文档内部指向其他文档时，指的是该文档的中文版，因此交叉引用会带 `.zh-CN` 后缀；源码路径与 URL 一律不改写。
+每份文档都有英文版 `NAME.md` 和中文版 `NAME.zh-CN.md`，包括根目录下的 `THIRD-PARTY-NOTICES.md`（记录内嵌音频的来源与许可证）。中文文档内部指向其他文档时，指的是该文档的中文版，因此交叉引用会带 `.zh-CN` 后缀；源码路径与 URL 一律不改写。
 
 ## 许可与预期用途
 
 这是一个捕获工具。它以运行它的用户的权限，读取所在机器的屏幕，并写出图像文件。它不注入输入、不挂钩（hook）或修改其他进程、不隐藏自己、不做持久化，也不试图击败任何保护；遇到 DRM 保护或防捕获保护的内容时，它会直接失败，并说明原因。请只在你有权检查的机器上使用它。
+
+
+
+
 

@@ -28,7 +28,17 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 
 如果哪天确实需要某个依赖，先往 `nuget.config` 里加回一个包源，并且要做好心理准备：那个包的 AOT 兼容性将成为你的问题。
 
-## 两个构建环境的坑
+## 构建环境的坑
+
+这里刻意不编号：随着发现的坑越来越多，那个数字总是会过期——而这正是本文档存在的意义的一个小缩影。
+
+**正在运行的实例会占住链接器输出。** 如果本仓库里的某个 `rattrap.exe` 还在运行，下一次构建会失败并报：
+
+```
+LINK : fatal error LNK1104: cannot open file "bin\Release\net9.0-windows\win-x64\native\rattrap.exe"
+```
+
+这条消息指向一个没人有意使用的文件，读起来像权限问题或磁盘问题，但两者都不是。Windows 会锁定已映射的可执行映像，所以一个从 `bin\...\native\` 启动的实例正占着原生链接器要写的那个文件。同一个实例还占着全局热键，导致新实例无法注册它。`tools/publish.ps1` 会在构建前检查这一点，并直接报出 pid 与路径；加 `-StopRunning` 可让它清理掉。
 
 **命名管道。** `dotnet build` 可能失败，报 `MSB3883` 和从
 `Microsoft.CSharp.Core.targets` 抛出的 `Access is denied`。这不是文件权限问题。MSBuild 的编译器任务和 Roslyn 服务器都通过*命名管道*捕获子进程输出，而一个受限沙箱可能禁止命名管道，却允许文件写入。`Directory.Build.props` 设置了 `UseSharedCompilation=false`，让编译留在同进程内进行，这解决了常见情形；如果仍然失败，构建就需要一个限制更少的环境，因为改任何文件权限都无济于事。
@@ -91,10 +101,16 @@ dotnet publish ... -p:RatTrapSigningDir=D:\certs    # 指定文件夹，优先�
 ```powershell
 pwsh tools\publish.ps1                  # 发布闸门：构建、签名、验证、自测
 pwsh tools\publish.ps1 -RequireSignature # 未签名时报错而不是警告
+pwsh tools\publish.ps1 -StopRunning      # 清掉会占住链接器的运行中实例
 ```
+
 ### 签名买到了什么，又没买到什么
 
-它产出一个可验证、可发现篡改的二进制：`Get-AuthenticodeSignature` 会报告一个签名者，而任何修改都会让签名失效。它**不**买来信誉（reputation）。因为证书是自签名的，`Status` 会读到 `UnknownError`——换成中文说就是"证书链终止于一个不受信任的根"——在每一台没有把 `phenixl-codesign.cer` 装进"受信任的根证书颁发机构"和"受信任的发布者"的机器上都是如此。SmartScreen 对一个下载来的副本依然会发出警告。
+它产出一个可验证、可发现篡改的二进制。在当前这版发布上已实测：`Status` 读到 `Valid`，因为这台机器上 `phenixl-codesign.cer` 已装入 `Cert:\CurrentUser\Root` 与 `Cert:\CurrentUser\TrustedPublisher`；而在发布副本上翻转**一个字节**就会让状态变成 `HashMismatch`——所以这个签名不是装饰。
+
+它**不**买来的是信誉（reputation），而且这种信任是逐机器、逐用户的。在没有安装该 `.cer` 的机器上，同一个二进制会报 `UnknownError`，即"证书链终止于一个不受信任的根"。在那里签名依然可验证、篡改依然会被发现，只是证书链不受信任而已。SmartScreen 对一个下载来的副本也依然会发出警告。
+
+注意已安装的作用域：用户级根与用户级受信任发布者，而**不是** `LocalMachine`。对本用户身份下运行的一切来说这已经足够，而且不需要提权；若要全机器安装，或让以其它账户运行的构建代理使用，则需把 `.cer` 装进 `LocalMachine` 存储。
 
 私钥才是有价值的部分。它按设计可跨项目复用，而且绝不能提交进仓库：`.gitignore` 出于这个原因排除了 `*.pfx`、`*.pvk`、`*.snk`、`*.cer` 和 `*.key`。该文件夹的 ACL 被限制为仅当前用户可访问。
 
@@ -121,6 +137,20 @@ python tools\make_icon.py src\RatTrap\app.ico
 
 从 16 到 256 共九种尺寸，4 倍超采样，小尺寸用 32bpp DIB，大尺寸用 PNG 载荷。脚本会断言每种尺寸都确实画出了东西、留下了一些透明度，并且有一个实心的箭头主体，这样一个画坏的多边形就不可能悄悄出厂。
 
+## 重新生成反馈提示音
+
+三段提示音以 base64 WAV 镜像的形式存放在 `src/RatTrap/Audio/SoundCues.g.cs`，而该文件是提交进仓库的，所以**日常构建既不需要这个生成器，也不需要源音频**。
+
+```powershell
+# 资源包地址与许可证见 THIRD-PARTY-NOTICES.md
+python tools\build_sounds.py --pack <解压后的资源包> --analyse            # 查看候选与其实测数据
+python tools\build_sounds.py --pack <解压后的资源包> --out src\RatTrap\Audio\SoundCues.g.cs
+python tools\build_sounds.py --verify src\RatTrap\Audio\SoundCues.g.cs    # 校验产物本身，而不是校验意图
+```
+
+`--verify` 不是走过场。这个生成器的第一版真正做了抽取，却仍然声明源采样率，导致每一段提示音都高一个八度、快一倍播放，而它唯一打印出来的证据是一个与错误采样率自洽的时长。现在它会用独立的 WAV 读取器把产出的字节读回来并断言格式；`rattrap selftest` 在 C# 里做同样的测量，所以载荷被截断时，程序自己的测试也会失败。
+
+需要 `soundfile`（`pip install soundfile`），它会带上 libsndfile 与 numpy。仅构建期需要：构建或运行 rat-trap 都不依赖它。
 ## 验证一次改动
 
 把下面这些全部跑一遍；每一类问题都各有其能被某一条抓住、而其他条抓不住的地方。
@@ -134,5 +164,6 @@ python tools\verify_cursor_output.py out\      # 对各文件格式的独立重�
 ```
 
 `tools/verify_cursor_output.py` 是必须保留的那个。它与程序本身、以及程序的自检都不共享代码，所以一个在写出器和它自己的往返解析器之间一致的 bug 依然会被暴露出来。正是它确立了：`.cur` 的 XOR 平面与 PNG 的 RGBA 逐字节相等。
+
 
 

@@ -53,11 +53,61 @@ public sealed class AppSettings
     /// <summary>Automatically write every supported format as soon as a cursor is recovered.</summary>
     public bool AutoSave { get; set; } = true;
 
-    /// <summary>Play a system sound when a cursor has been saved.</summary>
+    /// <summary>Play a system sound when a capture starts, stops, or saves a result.</summary>
     public bool PlaySound { get; set; } = true;
 
-    /// <summary>System sound alias to play. The default is the "new fax" notification.</summary>
-    public string SoundAlias { get; set; } = "FaxBeep";
+    /// <summary>
+    /// Which cue to play for a completed save: <c>builtin</c>, or the path of a WAV file to use instead.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The three cues are compiled into the program rather than named by a system sound alias, and that is
+    /// a correction rather than a preference. The system events that mean "began" and "ended" are
+    /// <c>DeviceConnect</c> and <c>DeviceDisconnect</c>, which are the hardware-insert and hardware-remove
+    /// events: using them for "capture started" sounds like a USB device being plugged in. A scheme alias
+    /// can also be missing, be remapped, or point several events at one file, so distinctness was not
+    /// something it could guarantee.
+    /// </para>
+    /// <para>
+    /// Values are case-insensitive. Anything other than <c>builtin</c> is treated as a path to a WAV file,
+    /// and a path that does not exist falls back to the built-in cue with a line in the log rather than
+    /// failing silently.
+    /// </para>
+    /// </remarks>
+    public string SaveSound { get; set; } = BuiltinSound;
+
+    /// <summary>Which cue to play when a capture starts: <c>builtin</c>, or a path to a WAV file.</summary>
+    public string StartSound { get; set; } = BuiltinSound;
+
+    /// <summary>Which cue to play when a capture is stopped: <c>builtin</c>, or a path to a WAV file.</summary>
+    public string StopSound { get; set; } = BuiltinSound;
+
+    /// <summary>The setting value that means "use the cue compiled into the program".</summary>
+    public const string BuiltinSound = "builtin";
+
+    /// <summary>
+    /// The value of the retired <c>soundalias</c> key, if the file still has one.
+    /// </summary>
+    /// <remarks>
+    /// Kept only so that the window can tell the user the setting has been replaced, once, instead of the
+    /// old value either being ignored in silence or being mistaken for a file path.
+    /// </remarks>
+    public string? LegacySoundAlias { get; private set; }
+
+    /// <summary>True when a configured cue value means the embedded cue rather than a file.</summary>
+    public static bool IsBuiltinSound(string? value)
+        => string.IsNullOrWhiteSpace(value) ||
+           value.Trim().Equals(BuiltinSound, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Things the user should be told about their settings file, collected while loading it.
+    /// </summary>
+    /// <remarks>
+    /// Notes rather than log calls, because loading a file should not depend on a logger, and collected
+    /// rather than emitted on use, because a message repeated on every capture stops being read. The window
+    /// prints these once at start-up.
+    /// </remarks>
+    public List<string> Notes { get; } = [];
 
     /// <summary>How long to accumulate observations before solving, in seconds.</summary>
     public int ReconstructSeconds { get; set; } = 8;
@@ -313,7 +363,17 @@ public sealed class AppSettings
             case "savedirectory": SaveDirectory = value; break;
             case "autosave": AutoSave = ParseBool(value, AutoSave); break;
             case "playsound": PlaySound = ParseBool(value, PlaySound); break;
-            case "soundalias": SoundAlias = value; break;
+            case "savesound": SaveSound = value; break;
+            // The old key named a system sound alias. It is recognised rather than ignored so that the
+            // change is announced, but it is deliberately NOT copied into SaveSound: the value is an alias
+            // such as FaxBeep, which is not a file, and quietly carrying it over would log a complaint about
+            // a setting the user never wrote in this form. The key disappears when the file is next saved.
+            case "soundalias":
+                Notes.Add($"the 'soundalias' setting ({value}) has been replaced: the cues are now built into " +
+                          "the program, so startsound/stopsound/savesound take 'builtin' or a path to a .wav");
+                break;
+            case "startsound": StartSound = value; break;
+            case "stopsound": StopSound = value; break;
             case "reconstructseconds": ReconstructSeconds = ParseInt(value, ReconstructSeconds); break;
             case "trim": Trim = ParseBool(value, Trim); break;
             case "nudgepointer": NudgePointer = ParseBool(value, NudgePointer); break;
@@ -333,6 +393,34 @@ public sealed class AppSettings
             _ => fallback,
         };
 
+    /// <summary>
+    /// Reduces a cue setting to <c>builtin</c> or an existing file, recording a note when it does neither.
+    /// </summary>
+    /// <remarks>
+    /// The earlier version of this setting held a system sound alias, so a config written by that version
+    /// contains <c>savesound = FaxBeep</c> under the same key name this one uses. Left alone, that value is
+    /// neither <c>builtin</c> nor a file, and the fall-back would fire on every single capture while the
+    /// file never corrected itself. Normalising at load makes the message a one-off and lets the next save
+    /// write a value that is actually valid.
+    /// </remarks>
+    private string NormalizeSound(string value, string key)
+    {
+        if (IsBuiltinSound(value))
+        {
+            return BuiltinSound;
+        }
+
+        string candidate = value.Trim();
+        if (File.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        Notes.Add($"the {key} setting names '{candidate}', which is neither 'builtin' nor an existing file, " +
+                  "so the built-in cue is used");
+        return BuiltinSound;
+    }
+
     private static int ParseInt(string value, int fallback)
         => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed) ? parsed : fallback;
 
@@ -345,10 +433,9 @@ public sealed class AppSettings
         {
             SaveDirectory = "captures";
         }
-        if (string.IsNullOrWhiteSpace(SoundAlias))
-        {
-            SoundAlias = "FaxBeep";
-        }
+        StartSound = NormalizeSound(StartSound, "startsound");
+        StopSound = NormalizeSound(StopSound, "stopsound");
+        SaveSound = NormalizeSound(SaveSound, "savesound");
         if (string.IsNullOrWhiteSpace(HotKey))
         {
             HotKey = "Ctrl+Insert";
@@ -379,8 +466,13 @@ public sealed class AppSettings
         text.AppendLine($"savedirectory = {SaveDirectory}");
         text.AppendLine($"autosave = {Bool(AutoSave)}");
         text.AppendLine($"playsound = {Bool(PlaySound)}");
-        text.AppendLine($"; a Windows sound alias, e.g. FaxBeep, Notify, Beep, WindowsPrintComplete");
-        text.AppendLine($"soundalias = {SoundAlias}");
+        text.AppendLine("; 'builtin' plays the cue compiled into the program. Any other value is a path to a WAV file.");
+        text.AppendLine("; The three built-in cues are distinct: the start cue sweeps upward, the stop cue is the same");
+        text.AppendLine("; sound swept downward, and the save cue is a darker, warmer tone, so all three are told apart");
+        text.AppendLine("; by ear alone - which matters when the window is behind a fullscreen game.");
+        text.AppendLine($"startsound = {StartSound}");
+        text.AppendLine($"stopsound = {StopSound}");
+        text.AppendLine($"savesound = {SaveSound}");
         text.AppendLine($"; how long to accumulate observations before solving, in seconds");
         text.AppendLine($"reconstructseconds = {ReconstructSeconds}");
         text.AppendLine($"trim = {Bool(Trim)}");
@@ -414,3 +506,5 @@ public sealed class AppSettings
         => $"target={Target}, out={ResolveSaveDirectory()}, hotkey={(HotKeyEnabled ? HotKey : "off")}, " +
            $"autosave={AutoSave}, sound={PlaySound}";
 }
+
+

@@ -36,7 +36,23 @@ The consequences are worth knowing before adding a dependency:
 If a dependency ever becomes necessary, re-add a package source to `nuget.config` first, and expect the
 AOT compatibility of that package to become your problem.
 
-## Two build-environment traps
+## Build-environment traps
+
+Deliberately not numbered: the count kept going stale as more were found, which is a small version of the
+same problem this whole document exists to prevent.
+
+**A running instance blocks the linker.** If a `rattrap.exe` from this repository is still running, the next
+build fails with
+
+```
+LINK : fatal error LNK1104: cannot open file "bin\Release\net9.0-windows\win-x64\native\rattrap.exe"
+```
+
+That message names a file nobody is consciously using and reads as a permissions or disk problem. It is
+neither. Windows locks a mapped executable image, so an instance started from `bin\...\native\` holds the
+very file the native linker is trying to write. The same instance is also holding the global hot key, so a
+second one cannot register it. `tools/publish.ps1` checks for this before building and names the pid and
+path instead; pass `-StopRunning` to have it clear them.
 
 **Named pipes.** `dotnet build` can fail with `MSB3883` and `Access is denied` thrown from
 `Microsoft.CSharp.Core.targets`. That is not a file permission problem. MSBuild's compiler task and the
@@ -132,14 +148,24 @@ runs that binary's own self-test before reporting success:
 ```powershell
 pwsh tools\publish.ps1                  # release gate: build, sign, verify, self-test
 pwsh tools\publish.ps1 -RequireSignature # fail instead of warning when unsigned
+pwsh tools\publish.ps1 -StopRunning      # clear a running instance that would block the linker
 ```
+
 ### What signing does and does not buy
 
-It produces a verifiable, tamper-evident binary: `Get-AuthenticodeSignature` reports a signer, and any
-modification invalidates the signature. It does **not** buy reputation. Because the certificate is
-self-signed, `Status` reads `UnknownError` — in English, "the certificate chain terminated in an
-untrusted root" — on every machine that has not installed `phenixl-codesign.cer` into Trusted Root
-Certification Authorities and Trusted Publishers. SmartScreen will still warn about a downloaded copy.
+It produces a verifiable, tamper-evident binary. Verified on the current release: `Status` reads `Valid`
+because `phenixl-codesign.cer` is installed into `Cert:\CurrentUser\Root` and
+`Cert:\CurrentUser\TrustedPublisher` on this machine, and flipping a single byte in a copy of the published
+binary turns the status into `HashMismatch` — so the signature is not decoration.
+
+What it does **not** buy is reputation, and the trust is per-machine and per-user. On a machine that has not
+installed the `.cer`, the same binary reports `UnknownError`, "the certificate chain terminated in an
+untrusted root". The signature is still verifiable there and tampering is still detected; only the chain is
+untrusted. SmartScreen will also warn about a downloaded copy.
+
+Note the scope that is installed: user root and user trusted publishers, not `LocalMachine`. That is enough
+for anything running as this user, and it needs no elevation; a machine-wide install or a build agent
+running as another account needs the `.cer` added to the `LocalMachine` stores instead.
 
 The private key is the valuable part. It is reusable across projects by design, and it must never be
 committed: `.gitignore` excludes `*.pfx`, `*.pvk`, `*.snk`, `*.cer` and `*.key` for that reason. The
@@ -178,6 +204,26 @@ Nine sizes from 16 to 256, supersampled 4x, with the small sizes as 32bpp DIBs a
 payloads. The script asserts that each size drew something, left some transparency, and has a solid
 arrow body, so a broken polygon cannot ship silently.
 
+## Regenerating the feedback cues
+
+The three cues live in `src/RatTrap/Audio/SoundCues.g.cs` as base64 WAV images, and that file is committed, so
+an ordinary build never needs the generator or the source audio.
+
+```powershell
+# the pack URL and licence are in THIRD-PARTY-NOTICES.md
+python tools\build_sounds.py --pack <extracted pack> --analyse            # candidates and their measurements
+python tools\build_sounds.py --pack <extracted pack> --out src\RatTrap\Audio\SoundCues.g.cs
+python tools\build_sounds.py --verify src\RatTrap\Audio\SoundCues.g.cs    # check the artifact, not the intent
+```
+
+`--verify` is not a formality. The first version of the generator decimated the audio while still declaring
+the source sample rate, so every cue played an octave high and at twice the speed, and the only evidence it
+printed was a duration that agreed with the wrong rate. It now reads the produced bytes back through an
+independent WAV reader and asserts the format, and `rattrap selftest` makes the same measurements in C# so a
+truncated payload fails the program's own test as well.
+
+Needs `soundfile` (`pip install soundfile`), which brings libsndfile and numpy. Build time only: none of it is
+required to build or run rat-trap.
 ## Verifying a change
 
 Run all of these; each catches a class of problem the others do not.
@@ -193,4 +239,5 @@ python tools\verify_cursor_output.py out\      # independent re-implementation o
 `tools/verify_cursor_output.py` is the one to keep. It shares no code with the program or with its
 self-test, so a bug that is consistent between a writer and its own round-trip parser still shows up. It
 is what established that the `.cur` XOR plane equals the PNG's RGBA byte for byte.
+
 

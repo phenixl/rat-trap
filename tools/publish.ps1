@@ -25,7 +25,11 @@ param(
     [string] $OutputDirectory = 'publish',
     [switch] $RequireSignature,
     [switch] $SkipSelfTest,
-    [switch] $SkipBuild
+    [switch] $SkipBuild,
+
+    # Stop any rat-trap instance running from this repository before building. Off by default, because
+    # killing a process is not this script's decision to make silently.
+    [switch] $StopRunning
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +42,35 @@ function Step([string] $message) { Write-Host "publish: $message" }
 function Die([string] $message) { Write-Error "publish: $message"; exit 1 }
 
 if (-not $SkipBuild) {
+    # A running instance blocks the build in a way that does not look like its cause. Windows locks a
+    # mapped executable image, so an instance started from bin\...\native\ stops the native linker from
+    # writing its own output, and the only symptom is LNK1104 naming a file nobody is consciously using -
+    # which reads as a permissions or disk problem and is neither. The same instance is also holding the
+    # global hot key, so a second one cannot register it.
+    $running = @()
+    foreach ($candidate in (Get-Process -Name 'rattrap' -ErrorAction SilentlyContinue)) {
+        $path = $null
+        try { $path = $candidate.Path } catch { continue }   # protected or already exited
+        if ($path -and $path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+            $running += [pscustomobject]@{ Id = $candidate.Id; Path = $path }
+        }
+    }
+    if ($running) {
+        foreach ($process in $running) { Step "running instance: pid $($process.Id) from $($process.Path)" }
+        if ($StopRunning) {
+            foreach ($process in $running) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                Step "stopped pid $($process.Id)"
+            }
+            Start-Sleep -Milliseconds 700
+        } else {
+            Die ("a rat-trap instance from this repository is running, and it holds the file the native " +
+                 "linker needs to write. Windows locks a mapped executable image, so the build would fail " +
+                 "with LNK1104 naming bin\...\native\rattrap.exe, which reads as a file permission " +
+                 "problem and is not one. Close it, or re-run with -StopRunning.")
+        }
+    }
+
     # Say what the build will use for signing before it starts, because a missing certificate causes a
     # skip rather than a failure, and discovering that after the fact is how an unsigned release ships.
     $certDir = $env:certs_path
@@ -77,10 +110,16 @@ if ($signature.Status -eq 'HashMismatch') {
     Die "the signature does not match the file contents; the binary was altered after signing"
 }
 
-if ($signature.Status -ne 'NotSigned') {
-    Step ("note: a self-signed certificate reports 'UnknownError' or 'UntrustedRoot' on any machine " +
-          "that has not installed the matching .cer into Trusted Root and Trusted Publishers. The " +
-          "signature is still verifiable and tampering still invalidates it.")
+if ($signature.Status -eq 'Valid') {
+    Step 'the signature chains to a trusted root on this machine, so it reads as Valid here'
+} elseif ($signature.Status -ne 'NotSigned') {
+    # Only said when it applies. Printing this next to a Valid signature would train the reader to skip it,
+    # and on a machine where the certificate is not installed it is the difference between "expected" and
+    # "something is wrong".
+    Step ("note: this certificate is self-signed, so on a machine that has not installed " +
+          "phenixl-codesign.cer into Trusted Root and Trusted Publishers the status reads " +
+          "'$($signature.Status)' rather than Valid. The signature is still verifiable and tampering " +
+          "still invalidates it; only the chain is untrusted.")
 }
 
 # --- the binary actually runs -------------------------------------------------------------------

@@ -107,7 +107,11 @@ target = cursor            ; or crosshair
 savedirectory = captures   ; relative paths resolve against the program directory
 autosave = true
 playsound = true
-soundalias = FaxBeep       ; a Windows sound scheme alias
+; three cues, compiled into the program: one when a capture starts, a different one when it stops,
+; and a third when a result is saved. 'builtin' plays the embedded cue; anything else is a .wav path.
+startsound = builtin
+stopsound = builtin
+savesound = builtin
 reconstructseconds = 8
 trim = false
 nudgepointer = true
@@ -185,12 +189,14 @@ src/RatTrap/
   Ui/             Win32 window and the capture session behind it
   Cli/            Command line, probe and capture pipelines
   SelfTest/       Deterministic verification
-tools/            Independent Python verifier, icon generator, signing script
+  Audio/          The three feedback cues, as embedded WAV images
+tools/            Independent Python verifier, icon generator, sound builder, signing and publish scripts
 docs/             Algorithm, measured behaviour, fullscreen capture, development notes
+THIRD-PARTY-NOTICES.md   The CC0 licence and provenance of the embedded feedback cues
 probe/            The original C++ probes this started from, and their text logs as evidence
 ```
 
-Every document exists in English as `NAME.md` and in Chinese as `NAME.zh-CN.md`. Inside a Chinese document,
+Every document exists in English as `NAME.md` and in Chinese as `NAME.zh-CN.md` - including `THIRD-PARTY-NOTICES.md` at the root, which records where the embedded audio came from and under what licence. Inside a Chinese document,
 a reference to another document means the Chinese edition of it, so cross-references carry the `.zh-CN`
 suffix; source paths and URLs are never rewritten.
 
@@ -201,4 +207,8 @@ who runs it, and writes image files. It does not inject input, does not hook or 
 does not hide itself, does not persist, and does not attempt to defeat any protection; it will simply
 fail on DRM-protected or capture-protected content, and say why. Use it on machines you are authorised to
 inspect.
+
+
+
+
 

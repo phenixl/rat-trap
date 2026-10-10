@@ -101,6 +101,10 @@ internal sealed class CaptureSession : IDisposable
         _reportedNoShape = false;
         _elapsed.Restart();
 
+        // Immediate feedback that the press was received. With the window hidden behind a fullscreen game
+        // there is nothing else to look at, and the compositor shape can take a second to arrive.
+        PlayFeedbackSound(_settings.StartSound, Audio.SoundCue.Start, "start");
+
         User32.GetCursorPos(out POINT cursor);
         var monitors = Monitors.Enumerate();
         if (monitors.Count == 0)
@@ -166,8 +170,21 @@ internal sealed class CaptureSession : IDisposable
         }
     }
 
-    public void Stop()
+    /// <summary>
+    /// Tears the session down.
+    /// </summary>
+    /// <param name="announce">
+    /// Play the stop cue. Only a stop the user asked for should be audible: <see cref="Start"/> resets by
+    /// calling this, <see cref="Dispose"/> runs on window close, and a completed capture has already given
+    /// its own cue. An unconditioned sound here would either play twice or announce a stop nobody requested.
+    /// </param>
+    public void Stop(bool announce = false)
     {
+        if (announce)
+        {
+            PlayFeedbackSound(_settings.StopSound, Audio.SoundCue.Stop, "stop");
+        }
+
         _source?.Dispose();
         _source = null;
         _shapeProvider = null;
@@ -314,9 +331,11 @@ internal sealed class CaptureSession : IDisposable
         Stop();
         _phase = SessionPhase.Done;
 
-        if (saved && _settings.PlaySound)
+        // The save cue is the one that means "the result exists". Stop is deliberately not announced here:
+        // this is completion, not a stop the user asked for, and two cues at once would be noise.
+        if (saved)
         {
-            PlayCompletionSound();
+            PlayFeedbackSound(_settings.SaveSound, Audio.SoundCue.Save, "save");
         }
 
         return new SessionStep(Acquired: true, Saved: saved, SavedBasePath: savedBase);
@@ -403,58 +422,46 @@ internal sealed class CaptureSession : IDisposable
     }
 
     /// <summary>
-    /// Plays the completion cue through the system sound alias.
+    /// Plays one of the three feedback cues.
     /// </summary>
+    /// <param name="configured">The setting value: <c>builtin</c>, or a path to a WAV file.</param>
+    /// <param name="cue">Which built-in cue to fall back to.</param>
+    /// <param name="what">The role, for the log line only.</param>
     /// <remarks>
-    /// <c>SND_ASYNC</c> so that a slow or missing sound device can never stall the message loop, and
-    /// <c>SND_NODEFAULT</c> so that a machine without the alias is silent rather than beeping.
+    /// This used to play a system sound alias. It does not any more: the embedded cues are guaranteed to
+    /// exist, guaranteed to be three distinct sounds, and are redistributable, none of which was true of an
+    /// entry in the machine's sound scheme. See <see cref="Audio.SoundPlayer"/>.
     /// </remarks>
-    private void PlayCompletionSound()
+    private void PlayFeedbackSound(string configured, Audio.SoundCue cue, string what)
     {
-        // SND_ASYNC so a slow or absent sound device can never stall the message loop, and
-        // SND_NODEFAULT so a machine without the alias is silent rather than beeping the default.
-        uint flags = User32.SND_ALIAS | User32.SND_ASYNC | User32.SND_NODEFAULT;
-        if (User32.PlaySoundW(_settings.SoundAlias, IntPtr.Zero, flags))
+        if (!_settings.PlaySound)
         {
             return;
         }
 
-        // The alias can be missing while the sound event itself is still configured, which is the case on
-        // a machine whose sound scheme was customised. Reading the scheme's file and playing it directly
-        // keeps the user's chosen sound instead of silently doing nothing.
-        string? path = ResolveSoundSchemePath(_settings.SoundAlias);
-        if (path is not null)
+        if (!AppSettings.IsBuiltinSound(configured))
         {
-            User32.PlaySoundW(path, IntPtr.Zero,
-                User32.SND_FILENAME | User32.SND_ASYNC | User32.SND_NODEFAULT);
-        }
-    }
-
-    /// <summary>Looks up the .wav a system sound event is mapped to, in the user's scheme first.</summary>
-    private static string? ResolveSoundSchemePath(string alias)
-    {
-        string[] subKeys =
-        [
-            $@"HKEY_CURRENT_USER\AppEvents\Schemes\Apps\.Default\{alias}\.Current",
-            $@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\AppEvents\Schemes\Apps\.Default\{alias}\.Current",
-        ];
-
-        foreach (string subKey in subKeys)
-        {
-            try
+            string path = configured.Trim();
+            if (File.Exists(path))
             {
-                object? value = Microsoft.Win32.Registry.GetValue(subKey, string.Empty, null);
-                if (value is string text && text.Length > 0 && File.Exists(text))
+                if (Audio.SoundPlayer.PlayFile(path))
                 {
-                    return text;
+                    return;
                 }
+                _log($"could not play the {what} sound from {path}; using the built-in cue");
             }
-            catch (Exception)
+            else
             {
-                // A missing or unreadable key just means trying the next one.
+                // Load-time normalisation already reported a value that is not a file, once, at start-up.
+                // Repeating it on every capture is how a message stops being read.
+                _log($"the {what} sound setting '{path}' is not a file; using the built-in cue");
             }
         }
-        return null;
+
+        if (!Audio.SoundPlayer.Play(cue))
+        {
+            _log($"the built-in {what} cue could not be played (no audio device, or playback refused)");
+        }
     }
 
     // -----------------------------------------------------------------------------
@@ -809,6 +816,8 @@ internal sealed class CaptureSession : IDisposable
             width,
             height);
 }
+
+
 
 
 

@@ -33,7 +33,7 @@ namespace RatTrap.Ui;
 internal static class MainWindow
 {
     // Control identifiers.
-    private const int IdModeGroup = 1200;
+    private const int IdModeLabel = 1200;
     private const int IdModeCursor = 1201;
     private const int IdModeCrosshair = 1202;
     private const int IdToggle = 1210;
@@ -56,7 +56,6 @@ internal static class MainWindow
     private const uint BM_SETCHECK = 0x00F1;
     private const uint BST_CHECKED = 1;
     private const uint BS_AUTORADIOBUTTON = 0x00000009;
-    private const uint BS_GROUPBOX = 0x00000007;
     private const uint WS_GROUP = 0x00020000;
 
     // --- window state -------------------------------------------------------------
@@ -149,12 +148,84 @@ internal static class MainWindow
             SelfCheckLog.AppendLine($"cursor                           : {_cursor.Width}x{_cursor.Height} " +
                                     $"hotspot ({_cursor.HotspotX},{_cursor.HotspotY}) {_cursor.Provenance}");
         }
+
+        if (!ReportLayout())
+        {
+            failures++;
+        }
+
         SelfCheckLog.AppendLine($"result                           : {(result == 0 && failures == 0 ? "PASS" : "FAIL")}");
         SelfCheckLog.AppendLine("--- session log ---");
         SelfCheckLog.Append(LogLines);
         FlushSelfCheck();
 
         return result == 0 && failures == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Reports where the controls ended up and checks the layout rules that are easy to get wrong.
+    /// </summary>
+    /// <remarks>
+    /// The target radios are required to share the button row rather than occupy a row of their own, and
+    /// "they are roughly in the right place" is not a property anyone can check by reading the layout code -
+    /// the arithmetic there is exactly the kind that looks right and is not. Measuring the real control
+    /// rectangles turns the requirement into something an automated run can fail.
+    /// </remarks>
+    private static bool ReportLayout()
+    {
+        if (_frame == IntPtr.Zero)
+        {
+            SelfCheckLog.AppendLine("layout: no window, nothing to check");
+            return false;
+        }
+
+        // Window rectangles rather than client rectangles: all six controls share one parent, so comparing
+        // their screen positions answers "same row" without needing a coordinate conversion.
+        (string Name, int Id)[] controls =
+        [
+            ("Start/Stop", IdToggle),
+            ("Open folder", IdBrowse),
+            ("Self-test", IdSelfTest),
+            ("Target:", IdModeLabel),
+            ("Cursor", IdModeCursor),
+            ("Crosshair", IdModeCrosshair),
+        ];
+
+        var found = new Dictionary<string, RECT>();
+        foreach ((string name, int id) in controls)
+        {
+            IntPtr control = User32.GetDlgItem(_frame, id);
+            if (control == IntPtr.Zero || !User32.GetWindowRect(control, out RECT rect))
+            {
+                SelfCheckLog.AppendLine($"layout: {name} is missing");
+                return false;
+            }
+            found[name] = rect;
+            SelfCheckLog.AppendLine($"layout: {name,-12} at ({rect.Left},{rect.Top}) {rect.Width}x{rect.Height}");
+        }
+
+        int rowTop = found["Start/Stop"].Top;
+        bool oneRow = controls.All(c => found[c.Name].Top == rowTop);
+        bool radiosLevel = found["Cursor"].Top == found["Crosshair"].Top;
+        // >= rather than >, and the first run of this check is why: the label's box ends exactly where the
+        // Cursor radio begins, which is adjacent and correct, and a strict comparison called it a failure.
+        // Overlap is what must not happen; touching is what a horizontal row looks like.
+        bool radiosRightOfButtons = found["Target:"].Left >= found["Self-test"].Right &&
+                                    found["Cursor"].Left >= found["Target:"].Right &&
+                                    found["Crosshair"].Left >= found["Cursor"].Right;
+        bool horizontal = found["Cursor"].Left != found["Crosshair"].Left;
+
+        SelfCheckLog.AppendLine($"layout: one row with the buttons     : {oneRow}");
+        SelfCheckLog.AppendLine($"layout: radios level with each other : {radiosLevel}");
+        SelfCheckLog.AppendLine($"layout: radios right of the buttons  : {radiosRightOfButtons}");
+        SelfCheckLog.AppendLine($"layout: radios side by side          : {horizontal}");
+
+        bool ok = oneRow && radiosLevel && radiosRightOfButtons && horizontal;
+        if (!ok)
+        {
+            SelfCheckLog.AppendLine("layout: FAIL - the target radios are not laid out horizontally on the button row");
+        }
+        return ok;
     }
 
     private static void FlushSelfCheck()
@@ -346,8 +417,11 @@ internal static class MainWindow
             User32.ES_MULTILINE | User32.ES_AUTOVSCROLL | User32.ES_READONLY,
             0, 0, 10, 10, frame, new IntPtr(IdLog), instance, IntPtr.Zero);
 
-        CreateControl(frame, instance, "BUTTON", "Target", IdModeGroup,
-            User32.WS_CHILD | User32.WS_VISIBLE | BS_GROUPBOX);
+        // A plain label, not a group box. The radios sit on the button row to the right of the buttons, where
+        // a group box would draw a frame around two controls on a shared line and steal vertical space from
+        // the preview and the log for no information.
+        CreateControl(frame, instance, "STATIC", "Target:", IdModeLabel,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.SS_LEFT);
         CreateControl(frame, instance, "BUTTON", "Cursor", IdModeCursor,
             User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | BS_AUTORADIOBUTTON | WS_GROUP);
         CreateControl(frame, instance, "BUTTON", "Crosshair", IdModeCrosshair,
@@ -370,7 +444,7 @@ internal static class MainWindow
 
         if (_font != IntPtr.Zero)
         {
-            foreach (int id in new[] { IdModeGroup, IdModeCursor, IdModeCrosshair, IdToggle, IdBrowse,
+            foreach (int id in new[] { IdModeLabel, IdModeCursor, IdModeCrosshair, IdToggle, IdBrowse,
                                        IdSelfTest, IdLog, IdSaveDir, IdHotKeyInfo })
             {
                 User32.SendMessageW(User32.GetDlgItem(frame, id), User32.WM_SETFONT,
@@ -393,6 +467,10 @@ internal static class MainWindow
         if (_settings.UsingFallbackPath)
         {
             AppendLog($"note: the program directory is not writable, so settings live in {_settings.FilePath}");
+        }
+        foreach (string note in _settings.Notes)
+        {
+            AppendLog($"settings: {note}");
         }
         AppendLog($"settings: {_settings.Describe()}");
         SyncPreview();
@@ -438,20 +516,16 @@ internal static class MainWindow
         int rowHeight = 22 * scale;
         int buttonHeight = 30 * scale;
 
+        // The two information lines occupy the top, full width. They used to sit to the right of a group box
+        // holding the target radios, which cost two extra rows of vertical space for a frame around two
+        // controls; the radios are on the button row now and the space goes to the preview and the log.
         int top = gap;
-        int modeHeight = (rowHeight * 2) + (gap * 3);
+        int infoWidth = Math.Max(80, client.Width - (gap * 2));
+        Move(IdSaveDir, gap, top, infoWidth, rowHeight);
+        Move(IdHotKeyInfo, gap, top + rowHeight, infoWidth, rowHeight);
 
-        Move(IdModeGroup, gap, top, 200 * scale, modeHeight);
-        Move(IdModeCursor, gap + (12 * scale), top + (16 * scale), 90 * scale, rowHeight);
-        Move(IdModeCrosshair, gap + (12 * scale), top + (16 * scale) + rowHeight + (gap / 2), 120 * scale, rowHeight);
-
-        int infoLeft = gap + (210 * scale);
-        int infoWidth = Math.Max(80, client.Width - infoLeft - gap);
-        Move(IdSaveDir, infoLeft, top + (6 * scale), infoWidth, rowHeight);
-        Move(IdHotKeyInfo, infoLeft, top + (6 * scale) + rowHeight, infoWidth, rowHeight);
-
-        int contentTop = top + modeHeight + gap;
         int bottom = buttonHeight + (gap * 2);
+        int contentTop = top + (rowHeight * 2) + gap;
         int contentHeight = Math.Max(10, client.Height - contentTop - bottom);
         int canvasWidth = Math.Max(10, (int)((client.Width - (gap * 3)) * 0.54));
         int logWidth = Math.Max(10, client.Width - canvasWidth - (gap * 3));
@@ -459,13 +533,24 @@ internal static class MainWindow
         MoveWindow(_canvas, gap, contentTop, canvasWidth, contentHeight);
         MoveWindow(_log, gap + canvasWidth + gap, contentTop, logWidth, contentHeight);
 
-        int x = gap;
         int y = client.Height - buttonHeight - gap;
+        int x = gap;
         foreach ((int id, int width) in new[] { (IdToggle, 100), (IdBrowse, 110), (IdSelfTest, 90) })
         {
             Move(id, x, y, width * scale, buttonHeight);
             x += (width * scale) + gap;
         }
+
+        // Target selection sits on the same row, to the right of the buttons, separated by a wider gap so it
+        // reads as its own group without a frame. The radios are level with each other and with the buttons,
+        // and the row is the button row, so the choice costs no height at all.
+        x += gap;
+        int radioHeight = buttonHeight;
+        Move(IdModeLabel, x, y, 56 * scale, radioHeight);
+        x += 56 * scale;
+        Move(IdModeCursor, x, y, 74 * scale, radioHeight);
+        x += 74 * scale;
+        Move(IdModeCrosshair, x, y, 88 * scale, radioHeight);
     }
 
     private static void Move(int id, int x, int y, int width, int height)
@@ -1010,4 +1095,9 @@ internal static class MainWindow
         _settings.Save();
     }
 }
+
+
+
+
+
 
