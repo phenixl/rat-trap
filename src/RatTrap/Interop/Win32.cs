@@ -473,6 +473,14 @@ internal static partial class User32
     [LibraryImport("user32.dll", EntryPoint = "GetWindowRect")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [LibraryImport("user32.dll", EntryPoint = "GetWindow")]
+    public static partial IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetDlgCtrlID")]
+    public static partial int GetDlgCtrlID(IntPtr hWnd);
 
     [LibraryImport("user32.dll", EntryPoint = "IsWindowVisible")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -562,6 +570,13 @@ internal static partial class User32
     public const uint WM_SETFONT = 0x0030;
     public const uint WM_GETDLGCODE = 0x0087;
     public const uint WM_ERASEBKGND = 0x0014;
+
+    /// <summary>Child-window navigation, for walking a window's control tree in the self-check.</summary>
+    public const uint GW_CHILD = 5;
+    public const uint GW_HWNDNEXT = 2;
+
+    public const int GWL_STYLE = -16;
+    public const int GWL_EXSTYLE = -20;
 
     /// <summary>Extended style: a tool window, so the floating observer does not clutter the taskbar.</summary>
     public const uint WS_EX_TOOLWINDOW = 0x00000080;

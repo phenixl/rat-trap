@@ -59,6 +59,7 @@ internal static class MainWindow
     private const uint EM_REPLACESEL = 0x00C2;
     private const uint EM_SCROLLCARET = 0x00B7;
     private const uint BM_SETCHECK = 0x00F1;
+    private const uint BM_GETCHECK = 0x00F0;
     private const uint BST_CHECKED = 1;
     private const uint BS_AUTORADIOBUTTON = 0x00000009;
     private const uint WS_GROUP = 0x00020000;
@@ -158,6 +159,8 @@ internal static class MainWindow
         {
             failures++;
         }
+
+        DumpControlTree();
 
         foreach (string line in ObservationWindow.SelfCheckLines)
         {
@@ -438,6 +441,14 @@ internal static class MainWindow
 
     private static void CreateChildren(IntPtr frame)
     {
+        // Assigned here, not only where CreateWindowExW returns, and that ordering is the whole point: WM_CREATE
+        // runs inside CreateWindowExW, so by the time this method executes _frame is still IntPtr.Zero. Every
+        // initialisation below that looks a control up through _frame was therefore silently doing nothing -
+        // GetDlgItem on a null window returns null, and the callers all check for null and skip. The two
+        // information lines at the top of the window came up empty for that reason, and so did the target radio
+        // pair's initial check state. Calls that took the handle as a parameter worked, which is why the
+        // controls existed at all and the fault looked like a blank strip rather than a broken window.
+        _frame = frame;
         IntPtr instance = Kernel32.GetModuleHandleW(null);
 
         _canvas = User32.CreateWindowExW(0, "RatTrapCanvas", string.Empty,
@@ -612,6 +623,68 @@ internal static class MainWindow
         }
     }
 
+    /// <summary>
+    /// Walks the window's real control tree and reports every control's class, id, rectangle and text.
+    /// </summary>
+    /// <remarks>
+    /// Added because a report of "there is a blank placeholder at the top of the window" could not be settled by
+    /// reading the layout code: that code only describes the controls it knows about and says nothing about
+    /// where they ended up or what they contain. This enumerates what Windows actually has, so an unexplained
+    /// empty region becomes an explained one - or turns out to be a control nobody meant to leave empty.
+    /// </remarks>
+    private static void DumpControlTree()
+    {
+        if (_frame == IntPtr.Zero)
+        {
+            return;
+        }
+
+        User32.GetClientRect(_frame, out RECT client);
+        SelfCheckLog.AppendLine($"controls: client area {client.Width}x{client.Height}, walking the real tree");
+        DumpChildren(_frame, 0);
+    }
+
+    private static void DumpChildren(IntPtr parent, int depth)
+    {
+        if (depth > 3)
+        {
+            return;
+        }
+
+        for (IntPtr child = User32.GetWindow(parent, User32.GW_CHILD); child != IntPtr.Zero;
+             child = User32.GetWindow(child, User32.GW_HWNDNEXT))
+        {
+            var className = new char[64];
+            var text = new char[160];
+            int classLength = User32.GetClassNameW(child, className, className.Length);
+            int textLength = User32.GetWindowTextW(child, text, text.Length);
+
+            string name = new(className, 0, Math.Clamp(classLength, 0, className.Length));
+            string content = new(text, 0, Math.Clamp(textLength, 0, text.Length));
+
+            User32.GetWindowRect(child, out RECT rect);
+            // Client-relative via ClientToScreen, so these numbers can be compared with the layout arithmetic.
+            // Subtracting the frame's window rect instead leaves the non-client border and caption in the
+            // result, which made every position look offset by the same amount and nearly hid a real fault.
+            POINT origin = default;
+            User32.ClientToScreen(_frame, ref origin);
+            int x = rect.Left - origin.X;
+            int y = rect.Top - origin.Y;
+
+            // A checked radio button is the difference between "the control exists" and "the choice was applied",
+            // and the same ordering fault that emptied the information lines also skipped the initial check.
+            string check = name == "Button"
+                ? $" check={User32.SendMessageW(child, BM_GETCHECK, UIntPtr.Zero, IntPtr.Zero).ToInt64()}"
+                : string.Empty;
+
+            SelfCheckLog.AppendLine($"controls: {new string(' ', depth * 2)}{name,-12} " +
+                                    $"id={User32.GetDlgCtrlID(child),-5} " +
+                                    $"visible={User32.IsWindowVisible(child),-5} " +
+                                    $"at ({x},{y}) {rect.Width}x{rect.Height}{check} text=\"{content}\"");
+
+            DumpChildren(child, depth + 1);
+        }
+    }
     private static void SetText(int id, string text)
     {
         IntPtr control = User32.GetDlgItem(_frame, id);
@@ -760,8 +833,27 @@ internal static class MainWindow
         {
             string directory = _settings.ResolveSaveDirectory();
             Directory.CreateDirectory(directory);
-            User32.ShellExecuteW(_frame, "open", directory, null, null, User32.SW_SHOWNORMAL);
-            AppendLog($"opened {directory}");
+
+            // explorer.exe with the folder as an argument, rather than asking the shell to "open" the folder,
+            // and with no null arguments. The previous version asked the shell to open the directory, passed
+            // null for the parameters and the working directory, and discarded the return value while logging
+            // success. ShellExecute reports failure as a code at or below 32, so a refusal was indistinguishable
+            // from a folder opening somewhere invisible, and there was no way to tell whether the cause was the
+            // verb lookup, the marshalling of those nulls, or the shell itself. Launching Explorer directly
+            // removes the verb, real strings remove the null question, and the code below removes the silence.
+            IntPtr result = User32.ShellExecuteW(_frame, "open", "explorer.exe", $"\"{directory}\"",
+                directory, User32.SW_SHOWNORMAL);
+
+            long code = result.ToInt64();
+            if (code > 32)
+            {
+                AppendLog($"opened {directory}");
+            }
+            else
+            {
+                AppendLog($"the shell refused to open {directory} (code {code}: 2 = not found, " +
+                          "5 = access denied, 31 = no association). The folder exists - the path is above.");
+            }
         }
         catch (Exception ex)
         {

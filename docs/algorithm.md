@@ -384,3 +384,51 @@ model**. The last of those guards a real hazard: the background model exposes an
 estimate while advancing its sample window, and a display that used it would be pushing the scene into the
 model it is supposed to be reporting on, changing the result it draws at whatever rate the screen happened to
 be repainted. Reading is therefore a separate entry point, and the test asserts the separation holds.
+
+## 14. Why cursor mode usually has nothing to reconstruct, and crosshair mode always does
+
+A reasonable question after watching the observation window: in cursor mode, even with the cursor captured
+whole against a black background, the panels stay empty - so does cursor mode need the background-differencing
+solver at all? The answer is no, and the reason is not an omission.
+
+**The two modes do not divide as "cursor = compositor, crosshair = reconstruction". They divide as
+"compositor first, reconstruction as the fallback", and crosshair can never use the first path.**
+
+* In **cursor mode** the program asks the compositor first. When the operating system is drawing the cursor,
+  `GetFramePointerShape` hands over the finished bitmap **with its alpha channel already in it**, exact and
+  already scaled for DPI and the pointer-size setting. There is nothing to solve, so the solver never runs -
+  which is why the observation panels are legitimately empty. The window says so rather than showing a void.
+* Cursor mode **does** fall back to reconstruction when the compositor reports no shape for roughly twenty-five
+  frames, which is what an application drawing its own cursor looks like. Then the solver runs and the panels
+  fill exactly as they do in crosshair mode.
+* **Crosshair mode** can never take the compositor path, because a crosshair is not a system cursor and the
+  compositor has no bitmap to hand over. Reconstruction is the only option, so the panels always fill.
+
+### Why one frame against a black background cannot give you alpha
+
+This is worth stating precisely, because "I captured the whole cursor against pure black, so surely the alpha
+is right there" is the intuitive reading and it is arithmetically wrong.
+
+Every observation is one equation per channel:
+
+```
+D = alpha*C + (1 - alpha)*B
+```
+
+Against black, `B = 0`, so the observation collapses to `D = alpha*C`. That is **one product**, and alpha and C
+cannot be separated from a single product - any pair `(alpha, C)` and `(alpha/k, k*C)` fits it equally well.
+Infinite solutions, one equation. A second frame with the *same* black background changes nothing; you need a
+second frame with a **different** background before the two can be told apart.
+
+That is exactly what the compositor path avoids, and it is why it is preferred: the operating system reports
+alpha and colour as separate values, so no differencing is required at all. Reconstruction exists for the case
+where nobody will tell us, and then two distinct backgrounds are the minimum price - which is also why
+`MinBackgroundVariance` exists, why a stationary pointer on a still scene is refused rather than guessed, and
+why the observation view's alpha brightness only starts to appear once the scene has moved underneath.
+
+### One more consequence, for the observation window specifically
+
+The compositor reports a shape when it **changes**. A cursor that was already on screen before the capture
+started may therefore report nothing until it moves, which is why the session reopens the duplication session
+and can nudge the pointer one pixel. In cursor mode this means the observation window can sit empty for a
+moment even when reconstruction will eventually run - the panels are not broken, they are waiting.
