@@ -33,6 +33,8 @@ internal static class CoreSelfTest
         CrosshairRejectsAnIntermittentOverlay(lines);
         MaskPacking(lines);
         EmbeddedSoundCues(lines);
+        ObservationViewReportsProgress(lines);
+        HistoryRingIsBounded(lines);
         return lines;
     }
 
@@ -1061,6 +1063,221 @@ internal static class CoreSelfTest
     // Assertion helpers
     // -----------------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------------
+    // Observation view and its recording
+    // -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Checks that the observation view fills in over time, and that watching does not change what is watched.
+    /// </summary>
+    /// <remarks>
+    /// "Progressively completed" is the claim the view exists to illustrate, so it is asserted rather than
+    /// eyeballed: the model's reach must grow monotonically as frames arrive. The second half of the test is
+    /// the more important one - refreshing the view must leave the reconstruction exactly as it was. If drawing
+    /// the picture advanced the model, then the picture would be of a reconstruction that only exists because
+    /// somebody was looking at it.
+    /// </remarks>
+    private static void ObservationViewReportsProgress(List<string> lines)
+    {
+        const int size = 128;
+        var scene = new ArgbBitmap(size, size);
+        var reconstructor = new CursorReconstructor();
+        var view = new ReconstructionView();
+        RECT roi = RECT.FromSize(1000, 1000, size, size);
+
+        int previousCells = -1;
+        long previousPairs = -1;
+        bool cellsMonotone = true;
+        bool pairsMonotone = true;
+        int frames = 0;
+
+        for (int frame = 0; frame < 40; frame++)
+        {
+            BuildSlowScene(scene, frame);
+
+            // The glyph follows the pointer, so its cursor-local offsets stay put while the screen pixels
+            // behind them change. That is the situation the solver is built for.
+            int localX = 24 + (frame % 40);
+            int localY = 24 + ((frame * 3) % 60);
+            StampBlob(scene, localX, localY, 3);
+
+            int hotspotX = roi.Left + localX;
+            int hotspotY = roi.Top + localY;
+
+            reconstructor.Observe(roi, scene, hotspotX, hotspotY);
+            view.Refresh(scene, roi, reconstructor, hotspotX, hotspotY);
+            frames++;
+
+            if (view.ModelCells < previousCells)
+            {
+                cellsMonotone = false;
+            }
+            if (view.PairsRecorded < previousPairs)
+            {
+                pairsMonotone = false;
+            }
+            previousCells = view.ModelCells;
+            previousPairs = view.PairsRecorded;
+        }
+
+        lines.Add($"  observation view: {frames} refreshes, model covers {view.ModelCells} offsets, " +
+                  $"{view.PairsRecorded} pairs, {view.CoveredPixels} covered ({view.SolvedPixels} solved, " +
+                  $"{view.AssumedPixels} assumed), last refresh {view.LastRefreshMilliseconds:F2} ms, " +
+                  $"background rebuild {view.LastBackgroundMilliseconds:F2} ms");
+
+        CheckTrue(lines, "the observation view's model only ever covers more offsets", cellsMonotone,
+            $"the offset count fell at some frame (last {previousCells})");
+        CheckTrue(lines, "recorded pairs never decrease without a scene change", pairsMonotone,
+            $"pairs fell at some frame (last {previousPairs})");
+        CheckTrue(lines, "the observation view found something", view.CoveredPixels > 0 && view.HasCursor,
+            $"{view.CoveredPixels} covered pixels, cursor={view.HasCursor}");
+
+        ReconstructionReport before = reconstructor.Solve().Report;
+        for (int i = 0; i < 5; i++)
+        {
+            view.Refresh(scene, roi, reconstructor, roi.Left + 24, roi.Top + 24);
+        }
+        ReconstructionReport after = reconstructor.Solve().Report;
+
+        CheckTrue(lines, "refreshing the view does not change the model",
+            before.CoveredPixels == after.CoveredPixels &&
+            before.PairsRecorded == after.PairsRecorded &&
+            before.FramesObserved == after.FramesObserved &&
+            before.AlphaSolvedPixels == after.AlphaSolvedPixels,
+            $"covered {before.CoveredPixels} -> {after.CoveredPixels}, " +
+            $"pairs {before.PairsRecorded} -> {after.PairsRecorded}, " +
+            $"frames {before.FramesObserved} -> {after.FramesObserved}");
+
+        CheckTrue(lines, "the view's counters agree with the solver",
+            view.CoveredPixels == after.CoveredPixels && view.PairsRecorded == after.PairsRecorded,
+            $"view says {view.CoveredPixels} covered / {view.PairsRecorded} pairs, " +
+            $"solver says {after.CoveredPixels} / {after.PairsRecorded}");
+
+        CheckTrue(lines, "the view reports what a refresh costs",
+            view.LastRefreshMilliseconds > 0,
+            "no timing was recorded");
+    }
+
+    /// <summary>
+    /// Checks the recording honours its scale, its byte budget and its frame budget, and evicts the oldest.
+    /// </summary>
+    /// <remarks>
+    /// The bounds are the whole reason the ring has three limits instead of one: a 1024-pixel region cannot be
+    /// stored at full resolution, and a recording that quietly grew without limit would be a memory leak with a
+    /// feature name. Both are asserted, on the two region sizes the program actually uses.
+    /// </remarks>
+    private static void HistoryRingIsBounded(List<string> lines)
+    {
+        var history = new ReconstructionHistory { Enabled = true };
+        history.Configure(256, 256);
+
+        lines.Add($"  history for a 256px region: 1/{history.Scale} scale, " +
+                  $"{history.BlockWidth}x{history.BlockHeight} blocks, {history.Capacity} frames, " +
+                  $"{history.Bytes / 1024.0 / 1024.0:F1} MB");
+
+        CheckTrue(lines, "a 256px region is recorded at half scale",
+            history.Scale == 2 && history.BlockWidth == 128 && history.BlockHeight == 128,
+            $"scale {history.Scale}, {history.BlockWidth}x{history.BlockHeight}");
+        CheckTrue(lines, "the recording stays inside its byte budget",
+            history.Bytes <= ReconstructionHistory.DefaultMaxBytes,
+            $"{history.Bytes} bytes against a budget of {ReconstructionHistory.DefaultMaxBytes}");
+
+        var reconstructor = new CursorReconstructor();
+        var scene = new ArgbBitmap(256, 256);
+        var view = new ReconstructionView();
+        RECT roi = RECT.FromSize(0, 0, 256, 256);
+        BuildSmoothScene(scene, 0);
+        StampBlob(scene, 128, 128, 4);
+        reconstructor.Observe(roi, scene, 128, 128);
+        view.Refresh(scene, roi, reconstructor, 128, 128);
+
+        int capacity = history.Capacity;
+        int pushes = capacity + 144;
+        for (int i = 0; i < pushes; i++)
+        {
+            history.Record(view, i + 1, 128 + (i % 8), 128);
+        }
+
+        CheckTrue(lines, "the recording fills to its capacity and no further",
+            history.Count == capacity && history.TotalRecorded == pushes,
+            $"count {history.Count} of capacity {capacity}, {history.TotalRecorded} recorded");
+
+        history.TryGetFrame(0, out HistoryFrame oldest);
+        history.TryGetFrame(history.Count - 1, out HistoryFrame newest);
+        CheckTrue(lines, "the recording evicts the oldest frame, not the newest",
+            newest.FrameIndex == pushes && oldest.FrameIndex == pushes - capacity + 1,
+            $"oldest {oldest.FrameIndex}, newest {newest.FrameIndex}, expected " +
+            $"{pushes - capacity + 1} and {pushes}");
+
+        CheckTrue(lines, "a recorded frame remembers where the pointer was",
+            newest.HotspotX == 128 + ((pushes - 1) % 8) && newest.RoiRect.Width == 256,
+            $"hotspot ({newest.HotspotX},{newest.HotspotY}) rect {newest.RoiRect}");
+
+        CheckTrue(lines, "the recorded panels are the promised size",
+            history.CompositeOf(0).Length == history.Blocks * 3 &&
+            history.ModelKindOf(0).Length == history.Blocks &&
+            history.ModelAlphaOf(0).Length == history.Blocks,
+            $"{history.CompositeOf(0).Length} composite bytes for {history.Blocks} blocks");
+
+        var large = new ReconstructionHistory();
+        large.Configure(1024, 1024);
+        lines.Add($"  history for a 1024px region: 1/{large.Scale} scale, " +
+                  $"{large.BlockWidth}x{large.BlockHeight} blocks, {large.Capacity} frames, " +
+                  $"{large.Bytes / 1024.0 / 1024.0:F1} MB");
+        CheckTrue(lines, "a 1024px region is scaled down rather than stored whole",
+            large.Scale >= 4 && large.BlockWidth * large.BlockHeight <= ReconstructionHistory.MaxBlocksPerFrame,
+            $"scale {large.Scale}, {large.BlockWidth}x{large.BlockHeight} blocks");
+        CheckTrue(lines, "the large region also stays inside the budget",
+            large.Bytes <= ReconstructionHistory.DefaultMaxBytes,
+            $"{large.Bytes} bytes");
+    }
+
+    /// <summary>
+    /// A scene that drifts slowly enough for the temporal median to establish a background.
+    /// </summary>
+    /// <remarks>
+    /// This exists because the first version of the observation test reused <see cref="BuildSmoothScene"/>,
+    /// which moves 0.15 radians per frame, and the result was zero solved pixels and almost no recorded pairs.
+    /// The failure was correct behaviour: over a fifteen-frame window that scene differs by tens of levels, so
+    /// the samples never agree, the background is never established, and every observation is discarded as
+    /// insufficient. The drift here is 0.02 radians per frame - still enough variance across a whole run to
+    /// solve alpha, since MinBackgroundVariance is 300, but slow enough that any one window agrees with itself.
+    /// A synthetic scene has to satisfy the precondition of the thing it is testing.
+    /// </remarks>
+    private static void BuildSlowScene(ArgbBitmap destination, int frame)
+    {
+        double t = frame * 0.02;
+        for (int y = 0; y < destination.Height; y++)
+        {
+            for (int x = 0; x < destination.Width; x++)
+            {
+                double b = 118 + (92 * Math.Sin((x / 150.0) + t));
+                double g = 118 + (92 * Math.Sin((y / 170.0) + (t * 1.1)));
+                double r = 118 + (92 * Math.Sin(((x + y) / 190.0) - (t * 0.9)));
+                destination.SetPixel(x, y, new ArgbPixel(
+                    (byte)Math.Clamp(b, 0, 255),
+                    (byte)Math.Clamp(g, 0, 255),
+                    (byte)Math.Clamp(r, 0, 255),
+                    255));
+            }
+        }
+    }
+
+    /// <summary>Paints a small opaque square centred on a point, standing in for a cursor glyph.</summary>
+    private static void StampBlob(ArgbBitmap frame, int centreX, int centreY, int radius)
+    {
+        for (int y = centreY - radius; y <= centreY + radius; y++)
+        {
+            for (int x = centreX - radius; x <= centreX + radius; x++)
+            {
+                if (x < 0 || y < 0 || x >= frame.Width || y >= frame.Height)
+                {
+                    continue;
+                }
+                frame.SetPixel(x, y, new ArgbPixel(0, 0, 255, 255));
+            }
+        }
+    }
     private static void Check(List<string> lines, string what, int expected, int actual)
     {
         if (expected == actual)
@@ -1078,5 +1295,7 @@ internal static class CoreSelfTest
         lines.Add(condition ? $"  ok   {what}" : $"FAIL {what}: {detail}");
     }
 }
+
+
 
 

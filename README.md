@@ -73,7 +73,7 @@ covered in [docs/development.md](docs/development.md).
 | `rattrap gui` | The interactive window (default with no arguments). |
 | `rattrap capture` | Acquire a cursor and write `.cur`, `.png` and `.ani`. |
 | `rattrap probe` | Inspect monitors, the live cursor, Desktop Duplication and the interop layer. Also runs the GDI-vs-DXGI comparison that established the behaviour above. |
-| `rattrap selftest` | 84 deterministic checks: interop structure sizes and vtable slot arithmetic, the reconstruction mathematics against synthetic ground truth, and the PNG/CUR/ICO/ANI writers. |
+| `rattrap selftest` | 111 deterministic checks: interop structure sizes and vtable slot arithmetic, the reconstruction mathematics against synthetic ground truth, and the PNG/CUR/ICO/ANI writers. |
 | `rattrap help` | Options. |
 
 ## The window
@@ -83,9 +83,10 @@ covered in [docs/development.md](docs/development.md).
 | **Target: Cursor / Crosshair** | Radio pair. `Cursor` follows the pointer. `Crosshair` watches a fixed square (256 px by default) at the centre of the foreground window — for a first-person shooter, where the crosshair does not move and the scene moves behind it. |
 | **Start / Stop** | One button whose label states what pressing it does next. |
 | **Open folder** | Opens the save directory in Explorer. |
-| **Self-test** | Runs the same 84 checks the command line does. |
+| **Self-test** | Runs the same 111 checks the command line does. |
 | **Global hot key** | `Ctrl+Insert` by default, changeable in `rat-trap.ini`. Works while a game has focus, which is the point: pressing it does not steal focus from the game. |
-| Preview | The recovered cursor or crosshair over a checkerboard, with the hotspot marked. |
+| **View: Delivery / Live/replay** | A second radio pair on the same row. `Delivery` is the recovered cursor over a checkerboard, hotspot marked. `Live/replay` shows the reconstruction's own progress - see below. |
+| Transport (in the canvas) | Drawn inside the preview when `Live/replay` is selected: jump to oldest, step back, pause/resume, step forward, jump to newest. Space and the arrow keys do the same. Pausing freezes the *view*; the capture keeps recording, so the replay keeps growing behind it. |
 | Log | Each new line is appended and scrolled into view. |
 
 A capture saves itself. There is no export button, because a cursor that has been acquired and had its
@@ -207,6 +208,8 @@ who runs it, and writes image files. It does not inject input, does not hook or 
 does not hide itself, does not persist, and does not attempt to defeat any protection; it will simply
 fail on DRM-protected or capture-protected content, and say why. Use it on machines you are authorised to
 inspect.
+
+
 
 
 

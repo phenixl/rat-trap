@@ -328,3 +328,59 @@ Until that exists, crosshair mode should be understood as a working demonstratio
 overlay rather than a dependable tool, and it is listed as such in `ROADMAP.md`. The alternative that makes
 the question disappear is a Windows.Graphics.Capture backend, which supplies the background directly and
 needs no inference at all.
+
+## 13. The observation view: three panels, one grid, and three coordinate spaces
+
+The reconstruction is a process rather than a result, and a process is hard to argue with in a bug report.
+The observation view exists so that the process can be looked at: three panels, refreshed on every captured
+frame, plus a recording that can be paused, stepped and replayed.
+
+| Panel | What it shows | Space |
+| --- | --- | --- |
+| Composite | The captured region as it arrived, cursor included | Screen |
+| Background | The model's current estimate for each of those pixels, near-black where it has no samples yet | Screen |
+| Model | Per-pixel classification as hue, recovered alpha as brightness | Screen, sampled through the pointer |
+
+### The part that is easy to get wrong
+
+There are **three** coordinate spaces in play, and they are all different sizes:
+
+* **Screen space** - the captured region, `min(160, monitor)` square in cursor mode and `CrosshairSize`
+  (256 by default) in crosshair mode.
+* **The background model's space** - also screen coordinates, but it is the **union of every region observed
+  so far**, so it grows as the pointer travels. A measured run with a 256-pixel region produced an
+  accumulation area of 512 by 512.
+* **Cursor-local offset space** - `KindMap` and the recovered cursor live here, anchored to the pointer
+  hotspot rather than the screen, and bounded by `MaxOffsetRadius` (193 square at the default of 96).
+
+The model is accumulated in the third space while the pixels being looked at are in the first. Sampling the
+model through the current pointer position - `offset = pixel - hotspot` - puts all three panels in one grid.
+That is what makes a replay comparable frame against frame, and it is what keeps a recording a fixed size.
+The cost is that the model panel shows the model's opinion of the pixels **under the pointer**, not the whole
+accumulated glyph at once. That is a deliberate trade, not an oversight: a view that showed the whole glyph
+would have to rescale as the glyph's extent grew, so the same feature would move around the panel between
+frames and two frames would not be comparable by eye.
+
+### Reading the panel
+
+| Hue | Classification |
+| --- | --- |
+| Green | alpha solved from background variation |
+| Cyan | XOR-composited, written with the exact XOR mask |
+| Orange | assumed opaque, because the background never varied underneath |
+| Red | unresolved: too few pairs, or not enough background variance |
+| Grey | never seen as foreground: the cursor does not cover this offset here |
+
+Brightness is the recovered alpha, with a floor so that a nearly transparent edge is still visible as an edge.
+The green region therefore does not merely appear, it **brightens** as alpha separates from the background -
+which is what "progressively completed" looks like. Watching the first few frames, most of the panel is
+orange and red; the green arrives as the scene moves under the pointer.
+
+### Verified, not asserted
+
+`rattrap selftest` checks that the model's coverage only ever grows, that recorded pairs never decrease
+without a scene change, and - the one that matters most - that **refreshing the view does not change the
+model**. The last of those guards a real hazard: the background model exposes an `Observe` that returns an
+estimate while advancing its sample window, and a display that used it would be pushing the scene into the
+model it is supposed to be reporting on, changing the result it draws at whatever rate the screen happened to
+be repainted. Reading is therefore a separate entry point, and the test asserts the separation holds.

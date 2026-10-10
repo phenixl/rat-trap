@@ -325,6 +325,18 @@ public sealed record ReconstructionResult(CursorImage? Cursor, ReconstructionRep
     /// </remarks>
     public IReadOnlyList<PixelModelKind> KindMap { get; init; } = [];
 
+    /// <summary>
+    /// Recovered alpha per pixel, 0-255, in the same layout as <see cref="KindMap"/>.
+    /// </summary>
+    /// <remarks>
+    /// Exists for the same reason as <see cref="KindMap"/>, which is that the observation view needs it:
+    /// classification says which pixels were solved, and this says what they were solved <i>to</i>. The alpha
+    /// channel filling in is the thing the reconstruction is actually doing, and a view that showed only the
+    /// classification would be showing the bookkeeping rather than the result. Assumed-opaque and
+    /// XOR-masked pixels report 255, because that is the alpha they are written with.
+    /// </remarks>
+    public IReadOnlyList<byte> AlphaMap { get; init; } = [];
+
     public int MapWidth { get; init; }
 
     public int MapHeight { get; init; }
@@ -361,6 +373,7 @@ public sealed record ReconstructionResult(CursorImage? Cursor, ReconstructionRep
         return builder.ToString();
     }
 }
+
 
 
 

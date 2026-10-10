@@ -59,7 +59,7 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 | `rattrap gui` | 交互式窗口（不带参数时的默认行为）。 |
 | `rattrap capture` | 获取一个光标并写出 `.cur`、`.png` 和 `.ani`。 |
 | `rattrap probe` | 检查显示器、实时光标、Desktop Duplication 以及 interop 层。同时运行那个确立了上述行为的 GDI 与 DXGI 对比。 |
-| `rattrap selftest` | 84 项确定性检查：interop 结构体大小与 vtable 槽位算术、用合成真值（synthetic ground truth）验证重建数学，以及 PNG/CUR/ICO/ANI 写出器。 |
+| `rattrap selftest` | 111 项确定性检查：interop 结构体大小与 vtable 槽位算术、用合成真值（synthetic ground truth）验证重建数学，以及 PNG/CUR/ICO/ANI 写出器。 |
 | `rattrap help` | 选项说明。 |
 
 ## 窗口
@@ -69,9 +69,10 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 | **Target: Cursor / Crosshair** | 一对单选按钮。`Cursor` 跟随指针。`Crosshair` 观察前台窗口中心的一个固定方块（默认 256 px）——对第一人称射击游戏而言，准星不动，动的是它背后的场景。 |
 | **Start / Stop** | 单个按钮，它的标签说明了按下之后接下来会发生什么。 |
 | **Open folder** | 在资源管理器中打开保存目录。 |
-| **Self-test** | 运行与命令行相同的 84 项检查。 |
+| **Self-test** | 运行与命令行相同的 111 项检查。 |
 | **Global hot key** | 默认 `Ctrl+Insert`，可在 `rat-trap.ini` 中修改。在游戏持有焦点时依然有效，而这正是关键：按下它不会把焦点从游戏里抢走。 |
-| Preview | 在棋盘格背景上显示还原出的光标或准星，并标出 hotspot。 |
+| **视图：交付 / 实时·回放** | 同一行上的第二组 radio。`交付` 是还原出的光标或准星叠在棋盘格上并标出 hotspot；`实时·回放` 展示重建过程本身——见下文。 |
+| 传输控件（画在画布内） | 选中 `实时·回放` 时画在预览区内：跳到最旧、后退一帧、暂停/继续、前进一帧、跳到最新。空格键与方向键等效。暂停只冻结**画面**，捕获仍在录制，所以回放区间会在它背后继续增长。 |
 | Log | 每一条新日志被追加并滚动到可见位置。 |
 
 捕获会自动保存自己。这里没有导出按钮，因为一个已经获取、并且已经分离出 alpha 的光标就是完成态的工作，而要求用户再按三个按钮，就是三次弄丢它的机会。文件命名为 `[hotspotX,hotspotY]_NNNN`，所以重新运行绝不会覆盖先前的捕获；完成提示音使用的是系统的 "new fax notification" 事件（`FaxBeep`），因此它会遵循该机器所用的任何声音方案。
@@ -167,6 +168,7 @@ probe/            本项目起步时所用的原始 C++ 探针，以及作为证
 ## 许可与预期用途
 
 这是一个捕获工具。它以运行它的用户的权限，读取所在机器的屏幕，并写出图像文件。它不注入输入、不挂钩（hook）或修改其他进程、不隐藏自己、不做持久化，也不试图击败任何保护；遇到 DRM 保护或防捕获保护的内容时，它会直接失败，并说明原因。请只在你有权检查的机器上使用它。
+
 
 
 

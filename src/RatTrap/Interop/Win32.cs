@@ -442,6 +442,9 @@ internal static partial class User32
     public const uint DT_TOP = 0x00000000;
     public const uint DT_WORDBREAK = 0x00000010;
     public const uint DT_NOPREFIX = 0x00000800;
+    public const uint DT_CENTER = 0x00000001;
+    public const uint DT_VCENTER = 0x00000004;
+    public const uint DT_SINGLELINE = 0x00000020;
 
     [LibraryImport("user32.dll", EntryPoint = "GetDlgItem")]
     public static partial IntPtr GetDlgItem(IntPtr hDlg, int nIDDlgItem);
@@ -489,6 +492,16 @@ internal static partial class User32
     public const uint MOD_SHIFT = 0x0004;
     public const uint MOD_WIN = 0x0008;
     public const uint MOD_NOREPEAT = 0x4000;
+    // --- input the observation transport needs ---
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_LBUTTONDOWN = 0x0201;
+    public const uint WM_LBUTTONUP = 0x0202;
+
+    public const int VK_LEFT = 0x25;
+    public const int VK_RIGHT = 0x27;
+    public const int VK_HOME = 0x24;
+    public const int VK_END = 0x23;
+    public const int VK_SPACE = 0x20;
     public const uint WM_HOTKEY = 0x0312;
 
     // --- shell and sound ---------------------------------------------------------------
@@ -749,4 +762,7 @@ internal static partial class Winmm
     [LibraryImport("winmm.dll", EntryPoint = "timeEndPeriod")]
     public static partial uint TimeEndPeriod(uint uPeriod);
 }
+
+
+
 

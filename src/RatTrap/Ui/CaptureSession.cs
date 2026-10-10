@@ -56,6 +56,9 @@ internal sealed class CaptureSession : IDisposable
     private CursorReconstructor? _reconstructor;
     private ArgbBitmap? _roi;
     private RECT _roiRect;
+    private int _hotspotX;
+    private int _hotspotY;
+    private long _observedFrames;
     private CaptureTarget _activeTarget;
     private MonitorDescriptor? _monitor;
 
@@ -77,6 +80,47 @@ internal sealed class CaptureSession : IDisposable
 
     /// <summary>The recovered cursor or crosshair, once there is one.</summary>
     public CursorImage? Cursor { get; private set; }
+
+    /// <summary>
+    /// The observation view's panels, refreshed only while <see cref="ObservationEnabled"/> is set.
+    /// </summary>
+    public ReconstructionView View { get; } = new();
+
+    /// <summary>The bounded recording that makes the progress replayable.</summary>
+    public ReconstructionHistory History { get; } = new();
+
+    /// <summary>
+    /// Whether the observation view is on screen, and therefore worth keeping up to date.
+    /// </summary>
+    /// <remarks>
+    /// Gating on this is the whole reason watching costs nothing when nobody is watching. Refreshing the view
+    /// means a <c>Solve()</c> and three panel fills per captured frame; recording means a downsampling pass and
+    /// a slice of a fixed ring. Neither happens unless the view is actually selected, and the recording is kept
+    /// when the capture stops so that a finished run can still be replayed.
+    /// </remarks>
+    public bool ObservationEnabled { get; set; }
+
+    /// <summary>
+    /// True while the compositor is handing the cursor over directly, which means there is nothing to solve.
+    /// </summary>
+    /// <remarks>
+    /// Worth surfacing because it is otherwise indistinguishable from a view that is simply empty: when the
+    /// operating system draws the cursor, GetFramePointerShape returns the finished bitmap and the
+    /// reconstruction never runs at all, so a live view has no model to show and no amount of waiting will
+    /// produce one.
+    /// </remarks>
+    public bool CompositorOwned { get; private set; }
+
+    /// <summary>Pointer hotspot of the most recent observed frame, in desktop coordinates.</summary>
+    public int HotspotX => _hotspotX;
+
+    public int HotspotY => _hotspotY;
+
+    /// <summary>Screen rectangle of the most recent capture.</summary>
+    public RECT RoiRect => _roiRect;
+
+    /// <summary>Frames captured since the session started.</summary>
+    public long ObservedFrames => _observedFrames;
 
     /// <summary>Short line describing what is happening, for the window's status strip.</summary>
     public string Status { get; private set; } = "Press Start to capture.";
@@ -152,19 +196,25 @@ internal sealed class CaptureSession : IDisposable
         if (_activeTarget == CaptureTarget.Crosshair)
         {
             _phase = SessionPhase.Crosshair;
+        CompositorOwned = false;
             Status = "Waiting for a foreground window to watch...";
             Detail = "Switch to the game. A square at the centre of its window is watched for a crosshair.";
             _log("crosshair mode: waiting for a foreground window that is not this one");
         }
         else if (_shapeProvider is not null)
         {
+            // WaitingForCompositor is where the operating system is expected to hand over the cursor bitmap.
+            // SessionPhase.Compositor is never assigned - the enum keeps it, but every compositor frame is
+            // served from this state, so this is the flag that says the cursor is not ours to solve.
             _phase = SessionPhase.WaitingForCompositor;
+            CompositorOwned = true;
             Status = "Asking the compositor for the cursor...";
             Detail = string.Empty;
         }
         else
         {
             _phase = SessionPhase.Reconstructing;
+        CompositorOwned = false;
             Status = "Reconstructing - move the pointer across a textured area.";
             Detail = "This backend cannot report the compositor's pointer shape.";
         }
@@ -261,6 +311,7 @@ internal sealed class CaptureSession : IDisposable
                     if (_ticks > 25)
                     {
                         _phase = SessionPhase.Reconstructing;
+        CompositorOwned = false;
                         Status = "Reconstructing - move the pointer across a textured area.";
                         _log("the operating system is not drawing a cursor here, so an application is probably");
                         _log("drawing its own. Switching to reconstruction.");
@@ -580,7 +631,16 @@ internal sealed class CaptureSession : IDisposable
 
         DiagnoseCapture(_roi, roi);
 
+        // Kept so that the observation view can place the model in screen coordinates. In cursor mode this
+        // rect previously existed only as a local, which meant nothing outside this method could map a
+        // cursor-local offset back to the pixel it belongs to.
+        _roiRect = roi;
+        _hotspotX = cursor.X;
+        _hotspotY = cursor.Y;
+        _observedFrames++;
+
         _reconstructor.Observe(roi, _roi, cursor.X, cursor.Y);
+        RefreshObservation();
 
         Status = $"Reconstructing: {_reconstructor.FramesObserved} frames, " +
                  $"background {_reconstructor.BackgroundPixelCount}px, {_elapsed.Elapsed.TotalSeconds:F0}s";
@@ -661,7 +721,12 @@ internal sealed class CaptureSession : IDisposable
 
         int hotspotX = _roiRect.Left + (_roiRect.Width / 2);
         int hotspotY = _roiRect.Top + (_roiRect.Height / 2);
+        _hotspotX = hotspotX;
+        _hotspotY = hotspotY;
+        _observedFrames++;
+
         _reconstructor.Observe(_roiRect, _roi, hotspotX, hotspotY, BackgroundSource.SpatialNeighbourMedian);
+        RefreshObservation();
 
         Status = $"Watching for a crosshair: {_reconstructor.FramesObserved} frames, " +
                  $"{_elapsed.Elapsed.TotalSeconds:F0}s";
@@ -756,6 +821,31 @@ internal sealed class CaptureSession : IDisposable
     }
 
     /// <summary>
+    /// Brings the observation view up to date and records the frame, if anyone is watching.
+    /// </summary>
+    /// <remarks>
+    /// Called from the capture tick rather than from a display timer, so the panels describe the frames that
+    /// were actually captured rather than whatever happened to be current when the screen was repainted. A
+    /// view driven by its own timer shows a sampled, aliased version of the process - and for a reconstruction
+    /// that converges over tens of frames, that is the difference between watching it fill in and watching it
+    /// jump.
+    /// </remarks>
+    private void RefreshObservation()
+    {
+        if (!ObservationEnabled || _roi is null || _reconstructor is null)
+        {
+            return;
+        }
+
+        View.Refresh(_roi, _roiRect, _reconstructor, _hotspotX, _hotspotY);
+
+        if (History.Enabled)
+        {
+            History.Record(View, _observedFrames, _hotspotX, _hotspotY);
+        }
+    }
+
+    /// <summary>
     /// Finds the square to watch: the centre of the foreground window, or the monitor centre as a
     /// fallback.
     /// </summary>
@@ -816,6 +906,11 @@ internal sealed class CaptureSession : IDisposable
             width,
             height);
 }
+
+
+
+
+
 
 
 

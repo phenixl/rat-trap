@@ -164,6 +164,58 @@ public sealed class CursorReconstructor
     public IReadOnlyList<string> Notes => _notes;
 
     /// <summary>
+    /// Pairs a cursor-local offset needs before the solver will treat it as part of the cursor.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so that the observation view can fade a pixel by how much evidence backs it using the same
+    /// threshold the classification uses. A view that invented its own number would show a pixel as
+    /// well-evidenced while the solver still considered it unevidenced, which is the kind of disagreement a
+    /// diagnostic view exists to rule out, not to create.
+    /// </remarks>
+    public int MinimumPairs => _options.MinPairs;
+
+    /// <summary>
+    /// Reads the model's current background estimate for a screen pixel, without changing anything.
+    /// </summary>
+    /// <remarks>
+    /// For the observation view. Returning false simply means that pixel has no samples yet, which the view
+    /// draws differently from a pixel whose estimate is merely dark.
+    /// </remarks>
+    public bool TryGetBackgroundEstimate(int x, int y, out ArgbPixel estimate, out int samples)
+    {
+        if (_background is null)
+        {
+            estimate = ArgbPixel.Transparent;
+            samples = 0;
+            return false;
+        }
+        return _background.TryGetEstimate(x, y, out estimate, out samples);
+    }
+
+    /// <summary>
+    /// Reads how much evidence one cursor-local offset has collected, without changing anything.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Solve"/> reports what each offset was finally classified as; this reports how much the
+    /// classification rests on. Showing the two together is what makes "the model is filling in" visible,
+    /// as opposed to only its final opinion.
+    /// </remarks>
+    public bool TryGetOffsetEvidence(int rx, int ry, out int pairs, out int uncovered)
+    {
+        pairs = 0;
+        uncovered = 0;
+        if (!_offsets.Contains(rx, ry))
+        {
+            return false;
+        }
+
+        ref OffsetCell cell = ref _offsets.Cell(rx, ry);
+        pairs = cell.Pairs;
+        uncovered = cell.Uncovered;
+        return true;
+    }
+
+    /// <summary>
     /// Feeds one captured frame.
     /// </summary>
     /// <param name="roi">Where <paramref name="pixels"/> came from, in desktop coordinates.</param>
@@ -618,6 +670,7 @@ public sealed class CursorReconstructor
             BuildReport(notes, _background.Bounds, transparent, alphaSolved, opaqueAssumed, xorMasked, unresolved))
         {
             KindMap = Array.ConvertAll(models, m => m.Kind),
+            AlphaMap = Array.ConvertAll(models, m => (byte)Math.Clamp(m.Alpha * 255.0, 0, 255)),
             MapWidth = width,
             MapHeight = height,
             MapOriginRx = minRx,
@@ -870,6 +923,8 @@ public sealed class CursorReconstructor
             Notes = notes,
         };
 }
+
+
 
 
 

@@ -4,6 +4,7 @@ using RatTrap.Capture;
 using RatTrap.Imaging;
 using RatTrap.Interop;
 using RatTrap.Output;
+using RatTrap.Reconstruct;
 using RatTrap.Settings;
 
 namespace RatTrap.Ui;
@@ -42,9 +43,30 @@ internal static class MainWindow
     private const int IdLog = 1220;
     private const int IdSaveDir = 1230;
     private const int IdHotKeyInfo = 1231;
+    private const int IdViewLabel = 1240;
+    private const int IdViewDelivery = 1241;
+    private const int IdViewLive = 1242;
+
+    /// <summary>Oldest, previous, pause/resume, next, newest.</summary>
+    private const int TransportCount = 5;
+
+    private const int TransportButtonWidth = 34;
+    private const int TransportButtonHeight = 22;
 
     private const uint CaptureTimerId = 1;
     private const uint SelfCheckTimerId = 2;
+    private const uint ObservationTimerId = 3;
+
+    // Self-check state for the observation view. A static block again, for the same reason as everything else
+    // here: an [UnmanagedCallersOnly] procedure cannot close over instance state.
+    private static int _observationTicks;
+    private static int _observationStep;
+    private static int _pauseBaselineCount;
+    private static int _pauseIndex;
+    private static long _pauseBaselineObserved;
+    private static CaptureTarget _selfCheckRestoreTarget;
+    private static int _transportChecks;
+    private static int _transportFailures;
     private const int HotKeyId = 0x5254; // 'RT'
     private const int TimerIntervalMs = 100;
 
@@ -74,6 +96,21 @@ internal static class MainWindow
     private static int _paintCount;
     private static int _timerCount;
     private static int _nativeExceptionCount;
+
+    /// <summary>False shows the delivered cursor; true shows the reconstruction's progress.</summary>
+    private static bool _liveView;
+
+    /// <summary>True while the live view is frozen on a recorded frame.</summary>
+    private static bool _replayPaused;
+
+    /// <summary>Index into the recording, from the oldest, or -1 to follow the newest frame.</summary>
+    private static int _replayIndex = -1;
+
+    /// <summary>Clickable rectangles of the transport controls, filled in while painting.</summary>
+    private static readonly RECT[] TransportRects = new RECT[TransportCount];
+
+    private static int _transportRebuilds;
+    private static long _replaySteps;
 
     private static CursorImage? _cursor;
     private static ArgbBitmap? _preview;
@@ -153,6 +190,8 @@ internal static class MainWindow
         {
             failures++;
         }
+
+        failures += _transportFailures;
 
         SelfCheckLog.AppendLine($"result                           : {(result == 0 && failures == 0 ? "PASS" : "FAIL")}");
         SelfCheckLog.AppendLine("--- session log ---");
@@ -289,7 +328,17 @@ internal static class MainWindow
 
         if (_selfCheck)
         {
+            // Crosshair mode forces the reconstruction path. In cursor mode the operating system usually hands
+            // the finished cursor over, and then there is no model to observe at all - which is correct, but it
+            // would make this check silently test nothing. The target is restored before the settings are saved
+            // so the self-check does not change the user's configuration.
+            _selfCheckRestoreTarget = _settings.Target;
+            _settings.Target = CaptureTarget.Crosshair;
+
+            // Selected before the session starts, so the session is created with observation already on.
+            SetView(live: true);
             StartSession();
+            User32.SetTimer(_frame, (UIntPtr)ObservationTimerId, 250, IntPtr.Zero);
             User32.UpdateWindow(_frame);
             if (_canvas != IntPtr.Zero)
             {
@@ -367,6 +416,11 @@ internal static class MainWindow
                         User32.PostQuitMessage(0);
                         return IntPtr.Zero;
                     }
+                    if (wParam.ToUInt64() == ObservationTimerId)
+                    {
+                        ObservationPhase();
+                        return IntPtr.Zero;
+                    }
                     OnTimer();
                     return IntPtr.Zero;
 
@@ -380,6 +434,32 @@ internal static class MainWindow
                 case User32.WM_COMMAND:
                     OnCommand((int)(wParam.ToUInt64() & 0xFFFF));
                     return IntPtr.Zero;
+
+                case User32.WM_KEYDOWN:
+                    // Keyboard equivalents for the transport, which is painted rather than created as controls
+                    // and therefore cannot be reached with Tab.
+                    if (_liveView)
+                    {
+                        switch ((int)(wParam.ToUInt64() & 0xFFFF))
+                        {
+                            case User32.VK_SPACE:
+                                TransportAction(2);
+                                return IntPtr.Zero;
+                            case User32.VK_LEFT:
+                                TransportAction(1);
+                                return IntPtr.Zero;
+                            case User32.VK_RIGHT:
+                                TransportAction(3);
+                                return IntPtr.Zero;
+                            case User32.VK_HOME:
+                                TransportAction(0);
+                                return IntPtr.Zero;
+                            case User32.VK_END:
+                                TransportAction(4);
+                                return IntPtr.Zero;
+                        }
+                    }
+                    break;
 
                 case User32.WM_CLOSE:
                     Shutdown();
@@ -427,6 +507,16 @@ internal static class MainWindow
         CreateControl(frame, instance, "BUTTON", "Crosshair", IdModeCrosshair,
             User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | BS_AUTORADIOBUTTON);
 
+        // A second radio group on the same row. WS_GROUP on the first of the pair is what separates it from the
+        // target pair; without it the four radios would behave as one group and choosing a view would clear the
+        // target.
+        CreateControl(frame, instance, "STATIC", "View:", IdViewLabel,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.SS_LEFT);
+        CreateControl(frame, instance, "BUTTON", "Delivery", IdViewDelivery,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | BS_AUTORADIOBUTTON | WS_GROUP);
+        CreateControl(frame, instance, "BUTTON", "Live/replay", IdViewLive,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | BS_AUTORADIOBUTTON);
+
         CreateControl(frame, instance, "STATIC", string.Empty, IdSaveDir,
             User32.WS_CHILD | User32.WS_VISIBLE | User32.SS_LEFT);
         CreateControl(frame, instance, "STATIC", string.Empty, IdHotKeyInfo,
@@ -445,7 +535,8 @@ internal static class MainWindow
         if (_font != IntPtr.Zero)
         {
             foreach (int id in new[] { IdModeLabel, IdModeCursor, IdModeCrosshair, IdToggle, IdBrowse,
-                                       IdSelfTest, IdLog, IdSaveDir, IdHotKeyInfo })
+                                       IdSelfTest, IdLog, IdSaveDir, IdHotKeyInfo,
+                                       IdViewLabel, IdViewDelivery, IdViewLive })
             {
                 User32.SendMessageW(User32.GetDlgItem(frame, id), User32.WM_SETFONT,
                     (UIntPtr)(ulong)_font, new IntPtr(1));
@@ -453,6 +544,7 @@ internal static class MainWindow
         }
 
         CheckRadio(_settings.Target == CaptureTarget.Crosshair ? IdModeCrosshair : IdModeCursor);
+        CheckViewRadio(IdViewDelivery);
         SetText(IdSaveDir, $"Saving to {_settings.ResolveSaveDirectory()}");
         SetText(IdHotKeyInfo, _settings.HotKeyEnabled
             ? $"Hot key: {_settings.HotKey}"
@@ -551,6 +643,13 @@ internal static class MainWindow
         Move(IdModeCursor, x, y, 74 * scale, radioHeight);
         x += 74 * scale;
         Move(IdModeCrosshair, x, y, 88 * scale, radioHeight);
+        x += 88 * scale;
+        x += gap * 2;
+        Move(IdViewLabel, x, y, 38 * scale, radioHeight);
+        x += 38 * scale;
+        Move(IdViewDelivery, x, y, 78 * scale, radioHeight);
+        x += 78 * scale;
+        Move(IdViewLive, x, y, 96 * scale, radioHeight);
     }
 
     private static void Move(int id, int x, int y, int width, int height)
@@ -568,6 +667,18 @@ internal static class MainWindow
     {
         User32.SendMessageW(User32.GetDlgItem(_frame, IdModeCursor), BM_SETCHECK, UIntPtr.Zero, IntPtr.Zero);
         User32.SendMessageW(User32.GetDlgItem(_frame, IdModeCrosshair), BM_SETCHECK, UIntPtr.Zero, IntPtr.Zero);
+
+        IntPtr target = User32.GetDlgItem(_frame, id);
+        if (target != IntPtr.Zero)
+        {
+            User32.SendMessageW(target, BM_SETCHECK, (UIntPtr)BST_CHECKED, IntPtr.Zero);
+        }
+    }
+
+    private static void CheckViewRadio(int id)
+    {
+        User32.SendMessageW(User32.GetDlgItem(_frame, IdViewDelivery), BM_SETCHECK, UIntPtr.Zero, IntPtr.Zero);
+        User32.SendMessageW(User32.GetDlgItem(_frame, IdViewLive), BM_SETCHECK, UIntPtr.Zero, IntPtr.Zero);
 
         IntPtr target = User32.GetDlgItem(_frame, id);
         if (target != IntPtr.Zero)
@@ -605,6 +716,14 @@ internal static class MainWindow
                 AppendLog($"target set to {_settings.Target}; settings saved to {_settings.FilePath}");
                 break;
 
+            case IdViewDelivery:
+                SetView(live: false);
+                break;
+
+            case IdViewLive:
+                SetView(live: true);
+                break;
+
             case IdBrowse:
                 OpenSaveFolder();
                 break;
@@ -634,6 +753,8 @@ internal static class MainWindow
         _cursor = null;
         _session?.Dispose();
         _session = new CaptureSession(_settings, AppendLog);
+        _session.ObservationEnabled = _liveView;
+        _session.History.Enabled = _liveView;
         _session.Start();
         _status = _session.Status;
         _detail = _session.Detail;
@@ -652,6 +773,39 @@ internal static class MainWindow
         _session?.Dispose();
         _session = null;
         SetToggleText();
+    }
+
+    /// <summary>
+    /// Switches the preview between the delivered cursor and the reconstruction's progress.
+    /// </summary>
+    /// <remarks>
+    /// Selecting the live view is what starts the observation work - refreshing the panels and recording frames
+    /// - so that nothing is paid for while nobody is watching. The recording is deliberately not cleared when
+    /// the capture stops or when the view is switched away: the interesting part of a reconstruction is often
+    /// only recognisable afterwards, and throwing the history away on stop would make the feature useless
+    /// exactly when it becomes useful.
+    /// </remarks>
+    private static void SetView(bool live)
+    {
+        _liveView = live;
+        _replayPaused = false;
+        _replayIndex = -1;
+        CheckViewRadio(live ? IdViewLive : IdViewDelivery);
+
+        if (_session is not null)
+        {
+            _session.ObservationEnabled = live;
+            _session.History.Enabled = live;
+        }
+
+        AppendLog(live
+            ? "view: live/replay - the reconstruction's progress, with a transport to step through it"
+            : "view: delivered cursor preview");
+
+        if (_canvas != IntPtr.Zero)
+        {
+            User32.InvalidateRect(_canvas, IntPtr.Zero, false);
+        }
     }
 
     private static void SetToggleText()
@@ -859,6 +1013,466 @@ internal static class MainWindow
         }
     }
 
+    // -----------------------------------------------------------------------------
+    // Observation view
+    // -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Draws the three observation panels and the transport, or the recorded frame the transport is parked on.
+    /// </summary>
+    /// <remarks>
+    /// Painted inside the existing preview canvas rather than placed in its own window, and the transport is
+    /// painted rather than created as buttons. Both choices are the same choice: switching views must not
+    /// change the window's layout, so everything this view needs is drawn into space the preview already had
+    /// and clicks are routed against rectangles recorded during the paint.
+    /// </remarks>
+    private static void PaintObservation(RECT client)
+    {
+        ReconstructionHistory? history = _session?.History;
+        ReconstructionView? view = _session?.View;
+
+        int gap = 8;
+        int header = 52;
+        int footer = TransportButtonHeight + (gap * 3);
+        int available = Math.Max(48, client.Width - (gap * 4));
+        int panelBoxWidth = available / 3;
+        int panelBoxHeight = Math.Max(24, client.Height - header - footer);
+
+        bool replaying = _replayPaused && history is { Count: > 0 };
+        int index = replaying ? Math.Clamp(_replayIndex < 0 ? history!.NewestIndex : _replayIndex,
+            0, history!.Count - 1) : 0;
+
+        bool drawn = false;
+        if (replaying && history is not null)
+        {
+            history.TryGetFrame(index, out HistoryFrame frame);
+            int x = gap;
+            int sw = history.BlockWidth;
+            int sh = history.BlockHeight;
+            BlitRgbScaled(x, header, panelBoxWidth, panelBoxHeight, history.CompositeOf(index), sw, sh);
+            DrawPanelCaption(x, header - 14, panelBoxWidth, "composite (as captured)");
+            x += panelBoxWidth + gap;
+            BlitRgbScaled(x, header, panelBoxWidth, panelBoxHeight, history.BackgroundOf(index), sw, sh);
+            DrawPanelCaption(x, header - 14, panelBoxWidth, "background estimate");
+            x += panelBoxWidth + gap;
+            BlitModelScaled(x, header, panelBoxWidth, panelBoxHeight,
+                history.ModelKindOf(index), history.ModelAlphaOf(index), sw, sh);
+            DrawPanelCaption(x, header - 14, panelBoxWidth, "model: hue = class, brightness = alpha");
+            drawn = true;
+        }
+        else if (view is { Composite: not null, Background: not null, Model: not null })
+        {
+            int x = gap;
+            BlitBitmapScaled(x, header, panelBoxWidth, panelBoxHeight, view.Composite);
+            DrawPanelCaption(x, header - 14, panelBoxWidth, "composite (as captured)");
+            x += panelBoxWidth + gap;
+            BlitBitmapScaled(x, header, panelBoxWidth, panelBoxHeight, view.Background);
+            DrawPanelCaption(x, header - 14, panelBoxWidth, "background estimate");
+            x += panelBoxWidth + gap;
+            BlitBitmapScaled(x, header, panelBoxWidth, panelBoxHeight, view.Model);
+            DrawPanelCaption(x, header - 14, panelBoxWidth, "model: hue = class, brightness = alpha");
+            drawn = true;
+        }
+
+        if (!drawn)
+        {
+            // Three different reasons for an empty panel, and they need different answers from the person
+            // looking at it, so they get three different sentences rather than one shrug.
+            string reason;
+            if (_session is null)
+            {
+                reason = "no capture in progress - press Start, then watch the model fill in";
+            }
+            else if (_session.CompositorOwned)
+            {
+                reason = "the operating system is drawing this cursor, so there is nothing to reconstruct: " +
+                         "switch Target to Crosshair, or point at an application that draws its own cursor";
+            }
+            else
+            {
+                reason = "waiting for the first frame";
+            }
+            DrawPanelCaption(gap, header, client.Width - (gap * 2), reason);
+        }
+
+        PaintTransport(client, history, index, replaying);
+    }
+
+    /// <summary>
+    /// Drives the observation view and its transport through a short scripted session during the self-check.
+    /// </summary>
+    /// <remarks>
+    /// The property worth testing here cannot be tested without a clock: a paused view must stop moving while
+    /// the recording behind it keeps growing. That is the difference between pausing the display and pausing
+    /// the reconstruction, and getting it wrong would freeze the record at the moment someone looked at it -
+    /// which is precisely when they most want it to keep filling in. So the check pauses, waits, and compares
+    /// the frozen index against a count that must have moved.
+    /// </remarks>
+    private static void ObservationPhase()
+    {
+        ReconstructionHistory? history = _session?.History;
+        ReconstructionView? view = _session?.View;
+        _observationTicks++;
+
+        // Let the capture produce a few frames before asserting anything about them.
+        if (_observationTicks < 4 || history is null || view is null)
+        {
+            return;
+        }
+
+        switch (_observationStep)
+        {
+            case 0:
+                if (history.TotalRecorded == 0)
+                {
+                    // No foreground window to watch, or the compositor refused to let go. Asserting the
+                    // transport against an empty recording would test nothing and fail intermittently, so it is
+                    // reported as skipped with the session's own explanation attached.
+                    SelfCheckLog.AppendLine("observation: SKIPPED - the reconstruction never produced a frame. " +
+                                            $"session says: {_session!.Status} / {_session.Detail}");
+                    _observationStep = 4;
+                    break;
+                }
+
+                SelfCheckLog.AppendLine($"observation: {view.Refreshes} view refreshes, " +
+                                        $"{history.TotalRecorded} frames recorded, ring {history.Count}/{history.Capacity}, " +
+                                        $"{history.Bytes / 1024.0 / 1024.0:F1} MB, 1/{history.Scale} scale");
+                SelfCheckLog.AppendLine($"observation: model covers {view.ModelCells} offsets, " +
+                                        $"{view.PairsRecorded} pairs, {view.CoveredPixels} covered, " +
+                                        $"refresh cost {view.LastRefreshMilliseconds:F2} ms, " +
+                                        $"background rebuild {view.LastBackgroundMilliseconds:F2} ms " +
+                                        $"({view.BackgroundRebuilds} rebuilds)");
+
+                Check(view.Refreshes > 0 && history.Count > 0, "the observation view never refreshed or nothing was recorded");
+                Check(history.Count <= history.Capacity, "the recording exceeded its capacity");
+                _pauseBaselineCount = history.Count;
+                _pauseBaselineObserved = _session!.ObservedFrames;
+                TransportAction(2);
+                _pauseIndex = CurrentReplayIndex();
+                _observationStep = 1;
+                break;
+
+            case 1:
+                // The view must be frozen, and the recording must not be.
+                Check(_replayPaused, "the pause button did not pause the view");
+                CheckEqual(_pauseIndex, CurrentReplayIndex(), "the paused view moved");
+                SelfCheckLog.AppendLine($"observation: paused at frame {_pauseIndex + 1}; " +
+                                        $"recording went {_pauseBaselineCount} -> {history.Count} frames, " +
+                                        $"capture {_pauseBaselineObserved} -> {_session!.ObservedFrames}");
+                Check(_session!.ObservedFrames > _pauseBaselineObserved,
+                    "the capture stopped while the view was paused");
+                _observationStep = 2;
+                break;
+
+            case 2:
+                // Stepping must move by exactly one and must not run off either end.
+                int before = CurrentReplayIndex();
+                TransportAction(1);
+                int back = CurrentReplayIndex();
+                CheckEqual(Math.Max(0, before - 1), back, "stepping back did not move exactly one frame");
+
+                TransportAction(3);
+                int forward = CurrentReplayIndex();
+                CheckEqual(Math.Min(history.Count - 1, back + 1), forward,
+                    "stepping forward did not move exactly one frame");
+
+                TransportAction(0);
+                CheckEqual(0, CurrentReplayIndex(), "the oldest button did not jump to the oldest frame");
+
+                TransportAction(1);
+                CheckEqual(0, CurrentReplayIndex(), "stepping back past the oldest frame did not clamp at 0");
+
+                TransportAction(4);
+                Check(!_replayPaused && _replayIndex == -1, "the newest button did not resume following");
+                _observationStep = 3;
+                break;
+
+            default:
+                SelfCheckLog.AppendLine($"observation: {_transportChecks} transport checks, " +
+                                        $"{_transportFailures} failed");
+                if (_frame != IntPtr.Zero)
+                {
+                    User32.KillTimer(_frame, (UIntPtr)ObservationTimerId);
+                    User32.PostQuitMessage(0);
+                }
+                break;
+        }
+    }
+
+    /// <summary>Records one self-check assertion, so the transport checks join the same tally as the rest.</summary>
+    private static void Check(bool condition, string message)
+    {
+        _transportChecks++;
+        if (!condition)
+        {
+            _transportFailures++;
+            SelfCheckLog.AppendLine($"observation FAIL: {message}");
+        }
+    }
+
+    private static void CheckEqual(int expected, int actual, string message)
+    {
+        _transportChecks++;
+        if (expected != actual)
+        {
+            _transportFailures++;
+            SelfCheckLog.AppendLine($"observation FAIL: {message} (expected {expected}, got {actual})");
+        }
+    }
+    /// <summary>Draws the transport bar and records where each button landed, for hit-testing.</summary>
+    private static void PaintTransport(RECT client, ReconstructionHistory? history, int index, bool replaying)
+    {
+        string[] labels = ["|<", "<", replaying ? "play" : "pause", ">", ">|"];
+        int gap = 8;
+        int total = (TransportCount * TransportButtonWidth) + ((TransportCount - 1) * 4);
+        int x = Math.Max(gap, (client.Width - total) / 2);
+        int y = client.Height - TransportButtonHeight - gap;
+
+        bool usable = history is { Count: > 0 };
+        for (int i = 0; i < TransportCount; i++)
+        {
+            TransportRects[i] = RECT.FromSize(x, y, TransportButtonWidth, TransportButtonHeight);
+            FillCanvasRect(TransportRects[i], usable ? new ArgbPixel(0x50, 0x50, 0x50, 255)
+                                                     : new ArgbPixel(0x30, 0x30, 0x30, 255));
+            DrawCanvasText(labels[i], TransportRects[i], 0x00E8E8E8, center: true);
+            x += TransportButtonWidth + 4;
+        }
+        _transportRebuilds++;
+
+        string caption;
+        if (history is null || history.Count == 0)
+        {
+            caption = "recording starts with the first captured frame";
+        }
+        else if (replaying)
+        {
+            history.TryGetFrame(index, out HistoryFrame frame);
+            // The denominator keeps growing while this is frozen, which is the visible proof that pausing the
+            // view does not pause the reconstruction.
+            caption = $"paused on {index + 1}/{history.Count} of {history.TotalRecorded} recorded. {frame.Describe()}";
+        }
+        else
+        {
+            caption = $"live: {history.Count}/{history.Capacity} frames in the ring, " +
+                      $"{history.Bytes / 1024.0 / 1024.0:F1} MB, 1/{history.Scale} scale";
+        }
+        DrawPanelCaption(gap, y - 16, client.Width - (gap * 2), caption);
+    }
+
+    /// <summary>Jumps, steps or pauses the replay. Index 2 is the pause toggle.</summary>
+    private static void TransportAction(int button)
+    {
+        ReconstructionHistory? history = _session?.History;
+        if (history is null || history.Count == 0)
+        {
+            return;
+        }
+
+        _replaySteps++;
+        switch (button)
+        {
+            case 0:                       // oldest
+                _replayPaused = true;
+                _replayIndex = 0;
+                break;
+            case 1:                       // one frame back
+                _replayPaused = true;
+                _replayIndex = Math.Max(0, CurrentReplayIndex() - 1);
+                break;
+            case 2:                       // pause / resume
+                _replayPaused = !_replayPaused;
+                _replayIndex = _replayPaused ? CurrentReplayIndex() : -1;
+                break;
+            case 3:                       // one frame forward
+                _replayPaused = true;
+                _replayIndex = Math.Min(history.Count - 1, CurrentReplayIndex() + 1);
+                break;
+            default:                      // newest, and follow it again
+                _replayPaused = false;
+                _replayIndex = -1;
+                break;
+        }
+
+        if (_canvas != IntPtr.Zero)
+        {
+            User32.InvalidateRect(_canvas, IntPtr.Zero, false);
+        }
+    }
+
+    /// <summary>The frame being shown: the parked one, or the newest recorded one.</summary>
+    private static int CurrentReplayIndex()
+    {
+        ReconstructionHistory? history = _session?.History;
+        if (history is null || history.Count == 0)
+        {
+            return 0;
+        }
+        return _replayIndex >= 0 ? Math.Min(_replayIndex, history.Count - 1) : history.NewestIndex;
+    }
+
+    /// <summary>Panel captions and the transport caption share one small text helper.</summary>
+    private static void DrawPanelCaption(int x, int y, int width, string text)
+    {
+        var rect = RECT.FromSize(x, y, Math.Max(16, width), 14);
+        DrawCanvasText(text, rect, 0x00B0B0B0, center: false);
+    }
+
+    /// <summary>Draws into the canvas DIB, which the paint handler blits to the screen afterwards.</summary>
+    private static void DrawCanvasText(string text, RECT rect, int colour, bool center)
+    {
+        IntPtr screen = User32.GetDC(IntPtr.Zero);
+        if (screen == IntPtr.Zero || _canvasMemoryDc == IntPtr.Zero)
+        {
+            return;
+        }
+        try
+        {
+            Gdi32.SetBkMode(_canvasMemoryDc, Gdi32.TRANSPARENT);
+            Gdi32.SetTextColor(_canvasMemoryDc, colour);
+            IntPtr previous = Gdi32.SelectObject(_canvasMemoryDc, _font);
+            uint flags = center ? User32.DT_CENTER | User32.DT_VCENTER | User32.DT_SINGLELINE : User32.DT_LEFT;
+            RECT target = rect;
+            User32.DrawTextW(_canvasMemoryDc, text, -1, ref target, flags | User32.DT_NOPREFIX);
+            Gdi32.SelectObject(_canvasMemoryDc, previous);
+        }
+        finally
+        {
+            User32.ReleaseDC(IntPtr.Zero, screen);
+        }
+    }
+
+    /// <summary>Fills a rectangle of the canvas DIB, used for the transport buttons.</summary>
+    private static unsafe void FillCanvasRect(RECT rect, ArgbPixel colour)
+    {
+        if (_canvasBits == IntPtr.Zero)
+        {
+            return;
+        }
+        byte* bits = (byte*)_canvasBits;
+        for (int y = Math.Max(0, rect.Top); y < Math.Min(_canvasHeight, rect.Bottom); y++)
+        {
+            byte* row = bits + ((long)y * _canvasWidth * 4);
+            for (int x = Math.Max(0, rect.Left); x < Math.Min(_canvasWidth, rect.Right); x++)
+            {
+                row[x * 4] = colour.B;
+                row[(x * 4) + 1] = colour.G;
+                row[(x * 4) + 2] = colour.R;
+                row[(x * 4) + 3] = 255;
+            }
+        }
+    }
+
+    /// <summary>Nearest-neighbour scale blit of a straight-BGRA bitmap into a destination rectangle.</summary>
+    /// <remarks>
+    /// Scaling is explicit rather than delegated to <c>StretchBlt</c>, which applies whichever filter mode
+    /// happens to be set and would blur a one-pixel cursor edge into a gradient - the opposite of what a
+    /// view for inspecting pixels should do.
+    /// </remarks>
+    private static unsafe void BlitBitmapScaled(int dx, int dy, int dw, int dh, ArgbBitmap source)
+    {
+        if (_canvasBits == IntPtr.Zero || source.Width <= 0 || source.Height <= 0)
+        {
+            return;
+        }
+        byte* bits = (byte*)_canvasBits;
+        for (int y = 0; y < dh; y++)
+        {
+            int cy = dy + y;
+            if (cy < 0 || cy >= _canvasHeight)
+            {
+                continue;
+            }
+            int sy = (int)((long)y * source.Height / dh);
+            byte* row = bits + ((long)cy * _canvasWidth * 4);
+            for (int x = 0; x < dw; x++)
+            {
+                int cx = dx + x;
+                if (cx < 0 || cx >= _canvasWidth)
+                {
+                    continue;
+                }
+                int sx = (int)((long)x * source.Width / dw);
+                int s = ((sy * source.Width) + sx) * 4;
+                row[cx * 4] = source.Pixels[s];
+                row[(cx * 4) + 1] = source.Pixels[s + 1];
+                row[(cx * 4) + 2] = source.Pixels[s + 2];
+                row[(cx * 4) + 3] = 255;
+            }
+        }
+    }
+
+    /// <summary>Nearest-neighbour scale blit of three-bytes-per-pixel RGB, as the recording stores it.</summary>
+    private static unsafe void BlitRgbScaled(int dx, int dy, int dw, int dh, ReadOnlySpan<byte> rgb, int sw, int sh)
+    {
+        if (_canvasBits == IntPtr.Zero || sw <= 0 || sh <= 0 || rgb.Length < sw * sh * 3)
+        {
+            return;
+        }
+        byte* bits = (byte*)_canvasBits;
+        for (int y = 0; y < dh; y++)
+        {
+            int cy = dy + y;
+            if (cy < 0 || cy >= _canvasHeight)
+            {
+                continue;
+            }
+            int sy = (int)((long)y * sh / dh);
+            byte* row = bits + ((long)cy * _canvasWidth * 4);
+            for (int x = 0; x < dw; x++)
+            {
+                int cx = dx + x;
+                if (cx < 0 || cx >= _canvasWidth)
+                {
+                    continue;
+                }
+                int sx = (int)((long)x * sw / dw);
+                int s = ((sy * sw) + sx) * 3;
+                row[cx * 4] = rgb[s];
+                row[(cx * 4) + 1] = rgb[s + 1];
+                row[(cx * 4) + 2] = rgb[s + 2];
+                row[(cx * 4) + 3] = 255;
+            }
+        }
+    }
+
+    /// <summary>Blits a recorded model panel, colouring it through the same mapping the live view uses.</summary>
+    private static unsafe void BlitModelScaled(int dx, int dy, int dw, int dh,
+        ReadOnlySpan<byte> kind, ReadOnlySpan<byte> alpha, int sw, int sh)
+    {
+        if (_canvasBits == IntPtr.Zero || sw <= 0 || sh <= 0 || kind.Length < sw * sh)
+        {
+            return;
+        }
+        byte* bits = (byte*)_canvasBits;
+        for (int y = 0; y < dh; y++)
+        {
+            int cy = dy + y;
+            if (cy < 0 || cy >= _canvasHeight)
+            {
+                continue;
+            }
+            int sy = (int)((long)y * sh / dh);
+            byte* row = bits + ((long)cy * _canvasWidth * 4);
+            for (int x = 0; x < dw; x++)
+            {
+                int cx = dx + x;
+                if (cx < 0 || cx >= _canvasWidth)
+                {
+                    continue;
+                }
+                int sx = (int)((long)x * sw / dw);
+                int s = (sy * sw) + sx;
+                byte k = kind[s];
+                ArgbPixel colour = k == 255
+                    ? new ArgbPixel(0x18, 0x18, 0x18, 255)
+                    : ReconstructionView.PanelColour((PixelModelKind)k, alpha.Length > s ? alpha[s] : (byte)0);
+                row[cx * 4] = colour.B;
+                row[(cx * 4) + 1] = colour.G;
+                row[(cx * 4) + 2] = colour.R;
+                row[(cx * 4) + 3] = 255;
+            }
+        }
+    }
     private static IntPtr CanvasProcCore(IntPtr hwnd, uint message, UIntPtr wParam, IntPtr lParam)
     {
         switch (message)
@@ -870,6 +1484,26 @@ internal static class MainWindow
 
             case 0x0014: // WM_ERASEBKGND: the paint handler fills everything.
                 return new IntPtr(1);
+
+            case User32.WM_LBUTTONDOWN:
+                // The transport is drawn by the observation view rather than created as controls, so that
+                // selecting a view costs no window layout at all. That means the clicks have to be routed here
+                // against the rectangles the last paint recorded.
+                if (_liveView && _transportRebuilds > 0)
+                {
+                    int x = unchecked((short)(long)lParam);
+                    int y = unchecked((short)((long)lParam >> 16));
+                    for (int i = 0; i < TransportCount; i++)
+                    {
+                        if (x >= TransportRects[i].Left && x < TransportRects[i].Right &&
+                            y >= TransportRects[i].Top && y < TransportRects[i].Bottom)
+                        {
+                            TransportAction(i);
+                            return IntPtr.Zero;
+                        }
+                    }
+                }
+                return IntPtr.Zero;
         }
         return User32.DefWindowProcW(hwnd, message, wParam, lParam);
     }
@@ -887,7 +1521,11 @@ internal static class MainWindow
 
             FillDib(client.Width, client.Height, new ArgbPixel(0x2A, 0x2A, 0x2A, 255));
 
-            if (_preview is not null)
+            if (_liveView)
+            {
+                PaintObservation(client);
+            }
+            else if (_preview is not null)
             {
                 int scale = Math.Max(1, Math.Min(6,
                     Math.Min((client.Width - 24) / Math.Max(1, _preview.Width),
@@ -1092,9 +1730,27 @@ internal static class MainWindow
         }
         StopSession();
         ReleaseCanvasDib();
+        if (_selfCheck)
+        {
+            _settings.Target = _selfCheckRestoreTarget;
+        }
         _settings.Save();
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

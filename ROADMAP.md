@@ -157,6 +157,18 @@ the monitor, and capture follows the pointer between monitors. Missing:
 | **`MapDesktopSurface`** | Implemented and preferred when `DesktopImageInSystemMemory` is set, but this machine reports it clear, so the path has never executed. |
 | **The global hot key under focus contention** | Registration is verified; that `Ctrl+Insert` reaches the window while an exclusive-fullscreen game holds focus is not, and cannot be without such a game. A game that grabs the keyboard at the driver level (raw input with no `Alt+Tab` out) would swallow it. |
 
+## 8. Configurable observation caps
+
+**Status: not implemented.** The observation recording is bounded by three constants in
+`ReconstructionHistory`: 16384 blocks per frame (which derives the scale), 32 MB of panels, and 300 frames.
+The measured consequences are in `docs/development.md`, and the defaults are the measured ones. They are
+constants rather than settings because the numbers that chose them were measured rather than guessed, and a
+knob nobody has a reason to turn is a knob that turns itself by accident.
+
+What would justify settings: a machine with more memory than this one wanting a longer replay, and a
+crosshair region of 1024 pixels wanting more than 1/8 scale, which is the one case where the block cap
+forces a visibly coarse panel. Both are legitimate, and both should come with the derived numbers displayed
+so the cost stays visible - which is what the transport caption already does.
 ## 7. Smaller items
 
 * **The CLI and the GUI carry parallel capture logic.** `Cli/CaptureCommand.cs` and
@@ -178,4 +190,5 @@ the monitor, and capture follows the pointer between monitors. Missing:
   the watch square is positioned by the window rect.
 * **Dynamic range.** HDR and 10-bit output are not handled; the capture path assumes 8-bit BGRA.
 * **Protected content** is detected and reported but naturally not worked around.
+
 

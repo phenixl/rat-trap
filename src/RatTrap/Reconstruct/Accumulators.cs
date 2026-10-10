@@ -128,6 +128,44 @@ internal sealed class BackgroundModel
     public bool Contains(int x, int y)
         => x >= Bounds.Left && x < Bounds.Right && y >= Bounds.Top && y < Bounds.Bottom;
 
+    /// <summary>
+    /// Reads the current background estimate for a pixel <b>without</b> changing the model.
+    /// </summary>
+    /// <param name="x">Screen x.</param>
+    /// <param name="y">Screen y.</param>
+    /// <param name="estimate">The median of the samples collected so far.</param>
+    /// <param name="samples">How many samples the estimate rests on.</param>
+    /// <returns>False when the pixel has no samples yet.</returns>
+    /// <remarks>
+    /// Deliberately separate from <see cref="Observe"/>, which also returns an estimate but advances the
+    /// window as a side effect. A display that called <c>Observe</c> once per frame to draw the background
+    /// would be pushing the scene into the model it is supposed to be reporting on, and would quietly change
+    /// the result it is drawing - every drawn frame becoming an extra observation, at whatever rate the
+    /// screen happened to be repainted. Reading is not observing, so this is the only acceptable entry point
+    /// for the observation view.
+    /// </remarks>
+    public bool TryGetEstimate(int x, int y, out ArgbPixel estimate, out int samples)
+    {
+        estimate = ArgbPixel.Transparent;
+        samples = 0;
+
+        if (!Contains(x, y))
+        {
+            return false;
+        }
+
+        int index = Index(x, y);
+        int count = _count[index];
+        if (count <= 0)
+        {
+            return false;
+        }
+
+        samples = count;
+        estimate = MedianOfWindow(index, count);
+        return true;
+    }
+
     private int Index(int x, int y) => ((y - Bounds.Top) * Bounds.Width) + (x - Bounds.Left);
 
     /// <summary>

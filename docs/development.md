@@ -241,3 +241,40 @@ self-test, so a bug that is consistent between a writer and its own round-trip p
 is what established that the `.cur` XOR plane equals the PNG's RGBA byte for byte.
 
 
+## What the observation view costs
+
+Measured on this machine, from the GUI self-check, because the numbers decide the design and were not obvious
+in advance:
+
+| Region | One refresh, including `Solve()` | Background-panel rebuild |
+| --- | --- | --- |
+| 128 x 128 | 0.34 ms | 0.29 ms |
+| 256 x 256 | 2.67 ms | 0.29 ms |
+
+At the capture tick of 100 ms, a 256-pixel region spends under 3% of the thread that also drives capture. That
+is why the view refreshes on the capture tick itself rather than on a display timer: a timer would show a
+sampled, aliased version of a process that converges over tens of frames, and for no saving worth having.
+
+The background panel is the expensive part and the slowest-moving, so it is rebuilt every fourth refresh, which
+is where the second column comes from - nine refreshes produced three rebuilds.
+
+### The recording's arithmetic
+
+The ring is bounded by three limits, because any one alone is wrong: a block count decides the scale, a byte
+budget decides the capacity, and a frame cap keeps the replay navigable.
+
+| Region | Scale | Blocks | Per frame | Capacity | Total |
+| --- | --- | --- | --- | --- | --- |
+| 160 x 160 (cursor) | 1/2 | 80 x 80 | 44.8 KB | 300 | 13.4 MB |
+| 256 x 256 (crosshair) | 1/2 | 128 x 128 | 114.7 KB | 256 | 32.0 MB |
+| 1024 x 1024 (maximum crosshair) | 1/8 | 128 x 128 | 114.7 KB | 256 | 32.0 MB |
+
+The last two rows are the point: the byte budget is a property of the recording, not of the region, so a
+sixteen-times larger capture costs the same memory and pays for it in resolution instead. Eight bytes per block
+carries composite RGB, background RGB, classification and alpha.
+
+Nothing is allocated per recorded frame; the ring is fixed arrays sized once at the derived capacity. A recorder
+that allocated on every capture tick would be adding garbage to the path it is observing.
+
+Given the numbers, making the caps configurable is a reasonable next step and is listed in `ROADMAP.md` rather
+than done here, so that the defaults stay the ones that were measured.
