@@ -84,9 +84,8 @@ covered in [docs/development.md](docs/development.md).
 | **Start / Stop** | One button whose label states what pressing it does next. |
 | **Open folder** | Opens the save directory in Explorer. |
 | **Self-test** | Runs the same 111 checks the command line does. |
+| **Observe...** | Opens a floating observation window showing the reconstruction in progress: three panels side by side, plus a transport to pause, step one frame either way and jump to either end. The window is owned by the main window, so it floats above it and closes with it, while still being draggable to another monitor. Pausing freezes the view; the capture keeps recording. |
 | **Global hot key** | `Ctrl+Insert` by default, changeable in `rat-trap.ini`. Works while a game has focus, which is the point: pressing it does not steal focus from the game. |
-| **View: Delivery / Live/replay** | A second radio pair on the same row. `Delivery` is the recovered cursor over a checkerboard, hotspot marked. `Live/replay` shows the reconstruction's own progress - see below. |
-| Transport (in the canvas) | Drawn inside the preview when `Live/replay` is selected: jump to oldest, step back, pause/resume, step forward, jump to newest. Space and the arrow keys do the same. Pausing freezes the *view*; the capture keeps recording, so the replay keeps growing behind it. |
 | Log | Each new line is appended and scrolled into view. |
 
 A capture saves itself. There is no export button, because a cursor that has been acquired and had its

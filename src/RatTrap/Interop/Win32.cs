@@ -380,6 +380,10 @@ internal static partial class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetForegroundWindow(IntPtr hWnd);
+
     [LibraryImport("user32.dll", EntryPoint = "UpdateWindow")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool UpdateWindow(IntPtr hWnd);
@@ -557,6 +561,10 @@ internal static partial class User32
     public const uint WM_APP = 0x8000;
     public const uint WM_SETFONT = 0x0030;
     public const uint WM_GETDLGCODE = 0x0087;
+    public const uint WM_ERASEBKGND = 0x0014;
+
+    /// <summary>Extended style: a tool window, so the floating observer does not clutter the taskbar.</summary>
+    public const uint WS_EX_TOOLWINDOW = 0x00000080;
     public const int SW_SHOW = 5;
     public const int SW_HIDE = 0;
     public const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;

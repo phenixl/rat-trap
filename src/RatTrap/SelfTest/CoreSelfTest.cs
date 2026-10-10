@@ -35,6 +35,7 @@ internal static class CoreSelfTest
         EmbeddedSoundCues(lines);
         ObservationViewReportsProgress(lines);
         HistoryRingIsBounded(lines);
+        ReplayCursorBehaviour(lines);
         return lines;
     }
 
@@ -1277,6 +1278,68 @@ internal static class CoreSelfTest
                 frame.SetPixel(x, y, new ArgbPixel(0, 0, 255, 255));
             }
         }
+    }
+    /// <summary>
+    /// Checks the replay transport: following, freezing, stepping by one, and not running off either end.
+    /// </summary>
+    /// <remarks>
+    /// Tested here rather than through the window because these are the mistakes that hide behind a button:
+    /// a step that moves two frames, a pause that snaps to the oldest, a forward step that walks past the
+    /// newest and shows nothing. None of them are visible without a clock and a pointer, and all of them are
+    /// visible to arithmetic.
+    /// </remarks>
+    private static void ReplayCursorBehaviour(List<string> lines)
+    {
+        const int count = 10;
+        var cursor = new ReplayCursor();
+
+        CheckTrue(lines, "a new replay follows the newest frame", !cursor.Paused && cursor.Resolve(count) == count - 1,
+            $"paused={cursor.Paused} index={cursor.Resolve(count)}");
+
+        // Stepping back from a live view moves away from the head, not from zero.
+        int back = cursor.StepBack(count);
+        CheckTrue(lines, "stepping back from live lands one before the newest", back == count - 2,
+            $"landed on {back}, expected {count - 2}");
+        CheckTrue(lines, "stepping back pauses", cursor.Paused, "it did not pause");
+
+        // Stepping forward at the newest frame must clamp, not wrap.
+        cursor.JumpNewest();
+        cursor.Pause(count);
+        int forward = cursor.StepForward(count);
+        CheckTrue(lines, "stepping forward at the newest frame clamps", forward == count - 1,
+            $"landed on {forward}, expected {count - 1}");
+
+        // Stepping back at the oldest frame must clamp too.
+        cursor.JumpOldest();
+        back = cursor.StepBack(count);
+        CheckTrue(lines, "stepping back at the oldest frame clamps at zero", back == 0, $"landed on {back}");
+
+        // Stepping forward from the oldest moves exactly one.
+        forward = cursor.StepForward(count);
+        CheckTrue(lines, "stepping forward from the oldest moves exactly one", forward == 1,
+            $"landed on {forward}, expected 1");
+
+        // Resuming follows the head again.
+        cursor.JumpNewest();
+        CheckTrue(lines, "jumping to the newest resumes following",
+            !cursor.Paused && cursor.ParkedIndex == -1 && cursor.Resolve(count) == count - 1,
+            $"paused={cursor.Paused} parked={cursor.ParkedIndex} index={cursor.Resolve(count)}");
+
+        // An empty recording must not produce an index at all.
+        var empty = new ReplayCursor();
+        empty.Pause(0);
+        CheckTrue(lines, "an empty recording resolves to nothing", empty.Resolve(0) == -1,
+            $"resolved to {empty.Resolve(0)}");
+        CheckTrue(lines, "stepping an empty recording does not produce an index",
+            empty.StepBack(0) == -1 && empty.StepForward(0) == -1, "a step produced an index");
+
+        // A park past the end, which happens when the window resizes the ring, must clamp on resolve.
+        var grown = new ReplayCursor();
+        grown.Pause(5);
+        CheckTrue(lines, "a park beyond a shrunken recording clamps",
+            grown.Resolve(3) == 2, $"resolved to {grown.Resolve(3)}");
+
+        lines.Add($"  replay cursor: {cursor.Steps + empty.Steps + grown.Steps} steps exercised");
     }
     private static void Check(List<string> lines, string what, int expected, int actual)
     {
