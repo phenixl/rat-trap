@@ -7,7 +7,105 @@ re-derive it.
 
 ---
 
-## 1. A Windows.Graphics.Capture backend — the highest-value item by a wide margin
+## 1. Animated cursors, through the compositor
+
+**Status: not implemented. Highest priority.**
+
+The compositor route makes this far cheaper than it looks, and the reason is already in
+`docs/measured-behaviour.md`: `GetFramePointerShape` hands over the finished bitmap **with its alpha channel**,
+so each phase of an animation arrives complete, exact, and already scaled for DPI and pointer size. Nothing has
+to be solved. `PointerShapeDecoder` already decodes an individual phase. What is missing is noticing that there
+is more than one, holding them in order, and knowing how long each is shown.
+
+**The real problem is the cycle, and it is a timing problem.** An animated cursor loops, so its phases are the
+cycle of a repeating sequence. Three things have to come out of watching one:
+
+1. **Which observed shapes are phases of one animation**, as opposed to the cursor changing *type* because the
+   pointer moved onto a different control. From the shape channel alone these look identical, and getting it
+   wrong produces an `.ani` that flickers between an arrow and an I-beam.
+2. **The order** of the phases within the cycle.
+3. **How long each phase lasts**, because a wrong `rate ` chunk makes a correct animation play at the wrong
+   speed - which is more obviously wrong than a missing one.
+
+**What is already known.**
+
+* A shape is reported **when it changes**, and the frame info carries `LastMouseUpdateTime`. The phases
+  therefore arrive as a sequence of timestamped events rather than as a stream of frames, and the interval
+  between consecutive shape updates is a *measurement* of the phase duration rather than an estimate. That is
+  the strongest signal available for (3), and it is strictly better than polling, which could only sample the
+  cycle and would have to guess the rest.
+* **Position is the discriminator for (1).** The phases of an animation arrive while the pointer is stationary;
+  a type change coincides with the pointer having moved onto something else. `DXGI_OUTDUPL_POINTER_POSITION`
+  comes with every frame, so a shape change at the same position is a phase and a shape change at a new position
+  is a type change. The existing one-pixel nudge is compatible with this, being a controlled move of one pixel,
+  so a tolerance of a few pixels keeps phases together.
+* **A cycle is visible as a repeat.** Order (2) falls out of finding the smallest period `p` such that
+  `shape[i] == shape[i+p]` across the observed run, which is ordinary cycle detection over a short sequence of
+  hashes. `CaptureSession` already hashes each shape to detect repeats, so the comparison exists.
+* `AniWriter` already emits whole-`.cur` frames with per-frame durations and a step sequence, and each `.cur`
+  carries its own hotspot, so phases with different shapes and hotspots need no new file-format work. That an
+  `.ani` `icon` chunk holds a complete `.cur` image rather than a bare DIB is established by byte arithmetic on
+  the system's own `aero_busy.ani` in
+  [docs/phase1-tech-selection.md](docs/phase1-tech-selection.md): eighteen `icon` sub-chunks of 30894 bytes
+  each, against `6 + 3*16` for the header plus DIBs of 16936, 9640 and 4264. Hand-building the bare-DIB
+  alternative makes `LoadCursorFromFileW` reject the file outright.
+
+**The rule that matters: refuse an incomplete cycle.** Emitting three of four phases as an `.ani` produces a
+file that plays, looks plausible, and is wrong - the worst outcome this project keeps running into. If no full
+cycle was observed, write the single best phase, say in the report how many distinct shapes were seen and that
+no cycle closed, and offer to keep collecting. A user who is told "four shapes seen, cycle not closed, press
+Start again" can act on it; a user handed a broken animation cannot.
+
+**Interaction with item 3.** The shape channel is event-driven, so its timing is only as good as the operating
+system's reporting, and that is unmeasured. Windows.Graphics.Capture delivers a steady frame stream with the
+cursor composited in, which measures phase durations directly and does not depend on change notifications at
+all. If the shape-channel timestamps turn out to be too coarse, item 3 becomes the better instrument for this
+item rather than a separate feature - which is worth knowing before building either.
+
+**Out of scope, stated rather than discovered later:** trails and motion blur. A trail is a composite of several
+past positions, which is a deconvolution problem with its own model, not an extra phase.
+
+## 2. Animated cursors without the compositor, and animated crosshairs
+
+**Status: not implemented. Second priority.**
+
+When the compositor is unavailable - an exclusive-fullscreen game, or an application drawing its own cursor -
+there is no finished bitmap to collect and the animation has to come out of the solver. That breaks the solver's
+premise rather than straining it: `alpha(r)` and `C(r)` differ between phases, so observations pooled across
+phases fit a model true of no single frame, and the fit degrades quietly rather than failing.
+
+**The approach, in the order the pieces become available.**
+
+1. **Find the phases before solving for anything.** The cheap detector is already established and needs no
+   background model at all: a cursor's **fully opaque interior** is recovered exactly from any single frame,
+   because an opaque pixel's composite does not depend on what is behind it. A per-frame signature taken from
+   the opaque subset - its shape, its colour, or both - therefore separates frames by phase without knowing
+   alpha anywhere.
+2. **Segment the run into phases** by that signature, using change-point detection rather than a fixed frame
+   count, because the phases have different and unknown durations.
+3. **Solve each phase with the existing solver, restricted to that phase's frames.** Each phase then gets the
+   full set of guards the solver already applies, and the background variance it needs comes from the pointer
+   moving across the scene while that phase is showing.
+4. **Order and time the phases** from the observed sequence: first-appearance order within a cycle, and
+   per-phase durations from frame timestamps aggregated over the whole run rather than from a single cycle,
+   which is what makes the durations survive one unusually long or short pass.
+5. **Report incomplete phases instead of padding them.** A phase with too few frames for `MinPairs` or too
+   little `MinBackgroundVariance` must be named as unresolved in the report and in the observation view, rather
+   than silently filled with whatever the fit happened to produce. The observation view is the right place to
+   watch this, which is a second reason it exists.
+
+**Animated crosshairs come almost for free, and that is the reason to build it this way.** The acquisition
+region is already a parameter: cursor mode follows the pointer, crosshair mode watches a fixed square. Phase
+segmentation and per-phase solving do not care which. Once step 3 works, pointing the same machinery at the
+crosshair's square gives an animated crosshair - a spread that opens, a hit marker, a recoil bloom - with no new
+algorithm, and the existing crosshair guards continue to apply per phase.
+
+**The one thing that does not carry over.** In cursor mode the pointer's own motion supplies the changing
+background. In crosshair mode the scene has to move, which that path already requires and already refuses
+without - so a crosshair animation over a still scene stays refused, phase by phase, rather than becoming
+answerable merely because there are now several phases to pool.
+
+## 3. A Windows.Graphics.Capture backend
 
 **Status: researched, not implemented.** Full reasoning, with citations, in
 [docs/fullscreen-capture.md](docs/fullscreen-capture.md).
@@ -42,7 +140,7 @@ everything on the UI thread like every other backend here.
 true and once false, and confirm that the cursor appears in exactly one of the two. That single test would
 establish both that the interop works and that the missing half of the architecture now exists.
 
-## 1b. Motion segmentation, which is what crosshair mode is really missing
+## 4. Motion segmentation, which is what crosshair mode is really missing
 
 **Status: not implemented, and it is the reason crosshair mode must be treated as experimental.**
 
@@ -78,35 +176,8 @@ synthetic crosshair over a *scrolling text* pattern must be rejected - the secon
 
 **The alternative is to make the whole question go away**: item 1's WGC backend supplies the background
 directly, so no inference about what is overlay and what is scene is needed at all. That is why it is item 1.
-## 2. Dynamic (animated) cursors
 
-**Status: not implemented.** The solver assumes a cursor whose shape does not change. A dynamic cursor
-breaks that premise: `alpha(r)` and `C(r)` differ between phases, so pooling observations across phases
-fits a model true of no single frame.
-
-**What is already known.**
-
-* The compositor path does not have this problem in principle: `GetFramePointerShape` reports each phase
-  as a new shape and each decodes independently. What is missing is *collecting* the phases into one
-  `.ani` and ordering them.
-* An `.ani` `icon` chunk contains a **complete `.cur` file image**, not a bare DIB. Proven by byte
-  arithmetic on `aero_busy.ani`: chunk length 30894 = `6 + 3*16` header + DIBs `16936 + 9640 + 4264`.
-  Hand-building the bare-DIB alternative makes `LoadCursorFromFileW` reject the file outright.
-  `AniWriter` already emits whole-`.cur` frames and accepts per-frame durations and a step sequence.
-* An opaque interior is recovered exactly with no background variation at all, which makes phase *change
-  detection* cheap even when full recovery is not possible.
-
-**Design sketch.** Detect that phases exist by change-point detection on the recovered model, not by
-counting shapes — a phase change and a cursor *type* change look identical from outside. Segment per-frame
-features (starting with the fully-opaque subset, which needs no background variation). Solve each phase
-with the existing solver restricted to its frames. Order phases from the transition graph, and estimate
-durations from dwell times, emitting a `rate ` chunk only when the observation ran long enough to see
-several cycles.
-
-**Trails and motion blur are explicitly out of scope.** A trail is a composite of several past positions,
-which is a deconvolution problem with its own model.
-
-## 3. Motion-compensated background for a parked cursor
+## 5. Motion-compensated background for a parked cursor
 
 **Status: not implemented.** Variation currently comes from the cursor moving, the scene changing, or (in
 crosshair mode) the neighbourhood. A cursor parked over a static scene is reported as unsolvable, which is
@@ -120,7 +191,7 @@ use the matched patch's centre as the background prediction, with its match resi
 static case. Any implementation must carry the match residual into the fit and be evaluated against a
 synthetic scrolling background where the true `B` is known.
 
-## 4. Pointer tracking for cursors the OS cannot locate
+## 6. Pointer tracking for cursors the OS cannot locate
 
 **Status: partial.** The pointer position comes from `GetCursorPos`, which is right whenever the system
 cursor is being *positioned* even if it is not drawn — covering most games that hide it and draw their own.
@@ -134,7 +205,7 @@ match against the partially recovered glyph, gives the next position.
 neighbouring offsets; the fix is to estimate the sub-pixel alignment that minimises the reconstruction
 residual and re-solve with it.
 
-## 5. Rotation, hot-plug, and per-monitor scaling
+## 7. Rotation, hot-plug, and per-monitor scaling
 
 Monitors are enumerated with per-monitor-V2 awareness, DPI and scale are reported, the ROI is clamped to
 the monitor, and capture follows the pointer between monitors. Missing:
@@ -147,7 +218,7 @@ the monitor, and capture follows the pointer between monitors. Missing:
 * **Per-monitor cursor scaling for the GDI fallback**, which reports native size and says so but does not
   offer to scale.
 
-## 6. Test coverage gaps
+## 8. Test coverage gaps
 
 | Gap | Why it matters |
 | --- | --- |
@@ -157,19 +228,7 @@ the monitor, and capture follows the pointer between monitors. Missing:
 | **`MapDesktopSurface`** | Implemented and preferred when `DesktopImageInSystemMemory` is set, but this machine reports it clear, so the path has never executed. |
 | **The global hot key under focus contention** | Registration is verified; that `Ctrl+Insert` reaches the window while an exclusive-fullscreen game holds focus is not, and cannot be without such a game. A game that grabs the keyboard at the driver level (raw input with no `Alt+Tab` out) would swallow it. |
 
-## 8. Configurable observation caps
-
-**Status: not implemented.** The observation recording is bounded by three constants in
-`ReconstructionHistory`: 16384 blocks per frame (which derives the scale), 32 MB of panels, and 300 frames.
-The measured consequences are in `docs/development.md`, and the defaults are the measured ones. They are
-constants rather than settings because the numbers that chose them were measured rather than guessed, and a
-knob nobody has a reason to turn is a knob that turns itself by accident.
-
-What would justify settings: a machine with more memory than this one wanting a longer replay, and a
-crosshair region of 1024 pixels wanting more than 1/8 scale, which is the one case where the block cap
-forces a visibly coarse panel. Both are legitimate, and both should come with the derived numbers displayed
-so the cost stays visible - which is what the transport caption already does.
-## 7. Smaller items
+## 9. Smaller items
 
 * **The CLI and the GUI carry parallel capture logic.** `Cli/CaptureCommand.cs` and
   `Ui/CaptureSession.cs` share every component that matters — capture source, pointer decoder, solver,
@@ -191,4 +250,15 @@ so the cost stays visible - which is what the transport caption already does.
 * **Dynamic range.** HDR and 10-bit output are not handled; the capture path assumes 8-bit BGRA.
 * **Protected content** is detected and reported but naturally not worked around.
 
+## 10. Configurable observation caps
 
+**Status: not implemented.** The observation recording is bounded by three constants in
+`ReconstructionHistory`: 16384 blocks per frame (which derives the scale), 32 MB of panels, and 300 frames.
+The measured consequences are in `docs/development.md`, and the defaults are the measured ones. They are
+constants rather than settings because the numbers that chose them were measured rather than guessed, and a
+knob nobody has a reason to turn is a knob that turns itself by accident.
+
+What would justify settings: a machine with more memory than this one wanting a longer replay, and a
+crosshair region of 1024 pixels wanting more than 1/8 scale, which is the one case where the block cap
+forces a visibly coarse panel. Both are legitimate, and both should come with the derived numbers displayed
+so the cost stays visible - which is what the transport caption already does.
