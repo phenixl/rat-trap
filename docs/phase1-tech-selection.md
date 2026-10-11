@@ -10,6 +10,15 @@
 > documentation text was not obtained are always marked `[inferred]`**; measurements taken on this machine are
 > marked `[measured]`, and are traceable to a specific probe and artefact file.
 
+> **Superseded framing, recorded rather than edited away.** This report was written when the working assumption
+> was that the result would be consumed by OBS Studio, either as an output fed into it or as a replacement for
+> its cursor drawing. That direction has been dropped. **This project is standalone and will not become an OBS
+> Studio plugin**, and the OBS-side defects this report documents - the 32x32 `GetIconInfo` size that makes the
+> captured cursor the wrong scale, the double cursor caused by an already-composited pointer, and alpha being
+> discarded by design on that side - are for OBS Studio to fix, not for this program to work around. They are
+> kept here as the evidence that motivated building something standalone, and nothing else in this report has
+> been rewritten: the measurements, the grades and the rejected approaches are as they were found.
+
 ## Evidence grades and sources
 
 | Grade | Meaning | Source in this round |

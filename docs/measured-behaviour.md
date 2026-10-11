@@ -213,7 +213,7 @@ on this machine can only be established against the file **bytes**, which is wha
 * **Rotation** other than identity was not exercised; the duplication backend refuses
   rotated outputs and falls back to GDI.
 * **HDR** and DRM-protected output were not exercised.
-* **Concurrent duplicators** (e.g. OBS display capture running at the same time) were not
+* **Concurrent duplicators** (a second capture or streaming tool running at the same time) were not
   exercised; the per-output duplication limit is handled as a fallible condition with a
   clear diagnostic, not as an assumption.
 

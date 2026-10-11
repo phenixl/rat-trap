@@ -104,7 +104,7 @@ Secondary advantages, all relevant to the fullscreen case:
 * It is the API the Game Bar and Snipping Tool use, so it is the path with the most real-world testing
   against games.
 * It is not subject to the per-output duplication limit, so it can run alongside another duplication
-  consumer such as OBS display capture.
+  consumer rather than competing with it for the output.
 * No hooking, no driver, no injection: nothing for an anti-cheat to object to. This directly addresses
   the concern that motivated the question.
 

@@ -123,7 +123,8 @@ The consequences go well beyond fullscreen:
   than statistical.
 * Crosshair mode stops needing the neighbourhood-background workaround.
 * A windowed game can be captured without the rest of the desktop.
-* It is not subject to the per-output duplication limit, so it can coexist with OBS display capture.
+* It is not subject to the per-output duplication limit that Desktop Duplication has, so it can run
+  alongside another capture or streaming tool instead of competing with it for the same output.
 * No hooking, no driver, no injection — which matters, because a hook is the one approach that could
   plausibly attract an anti-cheat's attention.
 

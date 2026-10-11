@@ -25,7 +25,7 @@ public sealed class CaptureBackendUnavailableException : Exception
 /// <remarks>
 /// <para>
 /// This is the backend that satisfies the "fullscreen game" requirement: it is the same
-/// mechanism OBS's Display Capture uses, and it keeps working when an application has
+/// mechanism most desktop capture tools use, and it keeps working when an application has
 /// taken over the display and desktop composition is bypassed, which is exactly where GDI
 /// <c>BitBlt</c> returns stale or black pixels.
 /// </para>
@@ -196,7 +196,7 @@ public sealed class DxgiDuplicationSource : ICaptureSource, IPointerShapeProvide
             string reason = hr switch
             {
                 Dxgi.DXGI_ERROR_NOT_CURRENTLY_AVAILABLE =>
-                    "the per-output duplication limit was reached (another capture tool such as OBS already " +
+                    "the per-output duplication limit was reached (another capture tool already " +
                     "holds this monitor, or the session limit for this output is exhausted)",
                 Dxgi.DXGI_ERROR_UNSUPPORTED =>
                     "the output does not support duplication (typical for some virtual/indirect display drivers, " +

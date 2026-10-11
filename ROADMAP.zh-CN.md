@@ -61,7 +61,7 @@
 * alpha 不再是一个搜索问题。不再需要靠光标移动、让某个像素时而被覆盖时而不被覆盖，一帧帧对就同时给出了 `D` 和 `B`，求解从统计性的变成精确的。
 * 准星模式不再需要邻域背景那一套变通办法。
 * 可以只捕获某个窗口化的游戏，而不带上桌面的其余部分。
-* 它不受"每个输出一个 duplication"的限制，因此能与 OBS 的显示器捕获共存。
+* 它不受 Desktop Duplication 那条"每个输出一个 duplication"的限制，因此可以与另一个捕获或推流工具并行运行，而不是和它争抢同一个输出。
 * 不挂钩、不驱动、不注入——这一点很重要，因为挂钩是唯一有可能引起反作弊注意的做法。
 
 **卡点是打包，不是概念。** WGC 是 WinRT，常规路线是用 NuGet 包里的 C#/WinRT 投影，而本项目无法还原（restore）包。变通办法就是 DXGI 已经在用的那套：手写声明 COM 接口并调用 vtable。大约 300–400 行：来自 `combase.dll` 的 `RoGetActivationFactory` 和那些 HSTRING 辅助函数，再加上对 `IGraphicsCaptureItemInterop`、`IGraphicsCaptureItem`、`IDirect3D11CaptureFramePool(Statics2)`、`IDirect3D11CaptureFrame`、`IGraphicsCaptureSession` 和 `IDirect3DDxgiInterfaceAccess` 的本地声明。在现有的定时器 tick 上轮询 `TryGetNextFrame`，而不是订阅 `FrameArrived`，这样就不需要 dispatcher queue，并且和这里其他所有后端一样，一切都留在 UI 线程上。
