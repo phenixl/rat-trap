@@ -279,10 +279,22 @@ public sealed class AppSettings
 
     // --- persistence --------------------------------------------------------------
 
+    /// <summary>
+    /// Where the settings file and the default save directory go when the program directory is not writable.
+    /// </summary>
+    /// <remarks>
+    /// Named once because both users of it must agree. They did not: the settings file fell back here while the
+    /// save directory did not, so an unelevated run from a protected location wrote its preferences successfully
+    /// and then advertised a save directory it could not create.
+    /// </remarks>
+    public static string FallbackRoot { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rat-trap");
+
     /// <summary>Resolves the settings path, preferring the program directory.</summary>
-    private static string ResolvePath(out bool usingFallback)
+    private static string ResolvePath(out bool usingFallback, out string? storageProblem)
     {
         usingFallback = false;
+        storageProblem = null;
         string programDirectory = AppContext.BaseDirectory;
         string candidate = Path.Combine(programDirectory, FileName);
 
@@ -302,18 +314,39 @@ public sealed class AppSettings
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
             usingFallback = true;
-            string fallbackDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rat-trap");
-            Directory.CreateDirectory(fallbackDirectory);
-            return Path.Combine(fallbackDirectory, FileName);
+
+            // Creating the fallback root can itself fail, and this is the branch that is supposed to be the
+            // graceful one. It was not: an unhandled UnauthorizedAccessException here took down the whole
+            // program before a window appeared, on a machine where the program directory is read-only and the
+            // per-user location is unavailable too - a locked-down or redirected profile, for instance. Running
+            // without persisting settings is a poor outcome; refusing to start is a worse one, and saying
+            // nothing about it is worse still.
+            try
+            {
+                Directory.CreateDirectory(FallbackRoot);
+                return Path.Combine(FallbackRoot, FileName);
+            }
+            catch (Exception fallbackFailure) when (fallbackFailure is UnauthorizedAccessException or IOException)
+            {
+                storageProblem = $"{fallbackFailure.GetType().Name}: {fallbackFailure.Message}";
+                // Still read from beside the program: a settings file there may be readable even though it
+                // cannot be written, and honouring it beats ignoring it.
+                return candidate;
+            }
         }
     }
 
     public static AppSettings Load()
     {
         var settings = new AppSettings();
-        settings.FilePath = ResolvePath(out bool fallback);
+        settings.FilePath = ResolvePath(out bool fallback, out string? storageProblem);
         settings.UsingFallbackPath = fallback;
+        if (storageProblem is not null)
+        {
+            settings.Notes.Add($"settings cannot be written anywhere this program can reach " +
+                               $"({storageProblem}); changes will be lost when it closes. Run it from a location " +
+                               $"this account can write to, or create {FallbackRoot} yourself.");
+        }
 
         if (!File.Exists(settings.FilePath))
         {
@@ -446,11 +479,21 @@ public sealed class AppSettings
     public string ResolveSaveDirectory()
     {
         string directory = SaveDirectory;
-        if (!Path.IsPathRooted(directory))
+        if (Path.IsPathRooted(directory))
         {
-            directory = Path.Combine(AppContext.BaseDirectory, directory);
+            // An absolute path is an instruction rather than a default, so it is honoured even when it turns out
+            // to be unusable. Saving somewhere the user did not ask for, silently, would be worse than reporting
+            // that the place they chose cannot be written to.
+            return Path.GetFullPath(directory);
         }
-        return Path.GetFullPath(directory);
+
+        // A relative path means "beside the program", which is only meaningful when the program directory can be
+        // written to. When it cannot - an installed copy under Program Files, a read-only share, or simply an
+        // unelevated run from such a location - the save directory has to follow the settings file to the
+        // fallback root. It previously did not, and the symptom was a program that showed a save path it could
+        // not create, refused to open that folder, and would then have failed to save a capture into it.
+        string root = UsingFallbackPath ? FallbackRoot : AppContext.BaseDirectory;
+        return Path.GetFullPath(Path.Combine(root, directory));
     }
 
     public void Save()

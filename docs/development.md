@@ -278,3 +278,31 @@ that allocated on every capture tick would be adding garbage to the path it is o
 
 Given the numbers, making the caps configurable is a reasonable next step and is listed in `ROADMAP.md` rather
 than done here, so that the defaults stay the ones that were measured.
+
+## Reproducing a write-protected install, and the trap in the fallback
+
+Two things learned by actually reproducing "open folder fails without an administrator token", both worth
+keeping because the first attempt at each was wrong in a way that looked like a program fault.
+
+**Denying write on a directory also stops programs being launched from it.** The obvious way to build a
+non-writable installation is `icacls <dir> /deny "<user>:(OI)(CI)(W)"`. It does make the directory
+non-writable, and it also makes the executable inside it fail to launch with `Access is denied` — from
+`Start-Process` and from `cmd /c start` alike. The reason is that the `(W)` alias includes `SYNCHRONIZE`, which
+creating a process from an image needs. Denying `(WD,AD)` on the directory alone gives what was wanted:
+creating children is refused, writing files is refused, and the program still runs. Two failed reproduction
+attempts were spent on this before the error message was read properly instead of blamed on the program.
+
+**A fallback path must not be able to throw.** The settings file falls back to `%LOCALAPPDATA%\rat-trap` when
+the program directory cannot be written. That fallback lived inside a `catch` block and called
+`Directory.CreateDirectory` on the fallback root without a guard of its own, so on a machine where the
+per-user location is unavailable as well — a locked-down or redirected profile, or a sandboxed child process,
+which is how this was found — the program printed `FATAL: UnauthorizedAccessException ...` and exited before
+any window appeared. The branch whose whole purpose is to degrade gracefully was the one that crashed. It now
+reports that settings cannot be persisted anywhere and carries on, because running without saving preferences
+is a poor outcome but refusing to start is a worse one.
+
+That second bug also explains why the save directory had to be fixed alongside it: it resolved against the
+program directory only, ignoring the fallback entirely, so the same unelevated run advertised a save path it
+could not create, refused to open that folder, and would then have failed to save a capture into it. Both now
+follow one named `FallbackRoot`, and a relative `savedirectory` follows it while an absolute one is honoured as
+written.

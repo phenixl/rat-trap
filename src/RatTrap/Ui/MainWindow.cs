@@ -252,8 +252,9 @@ internal static class MainWindow
         SelfCheckLog.AppendLine($"layout: no hole left by the hidden button : {noGap}");
 
         bool fieldWorks = CheckCrosshairField();
+        bool saveReported = CheckSaveDirectoryIsReported();
         bool ok = oneRow && radiosLevel && radiosRightOfButtons && horizontal && selfTestHidden && noGap &&
-                  fieldWorks;
+                  fieldWorks && saveReported;
         if (!ok)
         {
             SelfCheckLog.AppendLine("layout: FAIL - the target radios are not laid out horizontally on the button row");
@@ -531,7 +532,20 @@ internal static class MainWindow
 
         CheckRadio(_settings.Target == CaptureTarget.Crosshair ? IdModeCrosshair : IdModeCursor);
         SetCrosshairSizeField(_settings.CrosshairSize);
-        SetText(IdSaveDir, $"Saving to {_settings.ResolveSaveDirectory()}");
+
+        // Checked here, at start-up, rather than only when a capture tries to save: an unusable save directory is
+        // a way to lose a capture, and finding out at that point is finding out too late.
+        if (TryPrepareSaveDirectory(out string saveDirectory, out string? saveProblem))
+        {
+            SetText(IdSaveDir, $"Saving to {saveDirectory}");
+        }
+        else
+        {
+            SetText(IdSaveDir, $"Cannot save to {saveDirectory}");
+            AppendLog($"the save directory cannot be created: {saveProblem}");
+            AppendLog($"  set 'savedirectory' in {AppSettings.FileName} to a writable path, or move the program " +
+                      "to a location this account can write to.");
+        }
         SetText(IdHotKeyInfo, _settings.HotKeyEnabled
             ? $"Hot key: {_settings.HotKey}"
             : "Hot key: disabled in rat-trap.ini");
@@ -820,6 +834,58 @@ internal static class MainWindow
     }
 
     private static string Mark(bool ok) => ok ? "ok" : "FAIL";
+    /// <summary>
+    /// Checks that an unusable save directory is reported instead of being promised.
+    /// </summary>
+    /// <remarks>
+    /// The path is made unusable deterministically rather than by denying an ACL: a file is created where a
+    /// directory would have to be, so creating the child throws on every machine and for every account. The
+    /// property under test is that the failure comes back with the path and a reason attached, because the
+    /// reported symptom was a program that displayed a save location it could not create and then failed when
+    /// asked to open it. The user's own setting is restored afterwards.
+    /// </remarks>
+    private static bool CheckSaveDirectoryIsReported()
+    {
+        string original = _settings.SaveDirectory;
+        string blocker = Path.Combine(AppContext.BaseDirectory, $".rattrap-save-probe-{Environment.ProcessId}");
+        bool ok;
+
+        try
+        {
+            File.WriteAllText(blocker, string.Empty);
+            _settings.SaveDirectory = Path.Combine(blocker, "captures");
+
+            ok = !TryPrepareSaveDirectory(out string directory, out string? problem) &&
+                 problem is { Length: > 0 } &&
+                 directory.Contains("captures", StringComparison.OrdinalIgnoreCase);
+
+            SelfCheckLog.AppendLine($"save directory: unusable path reported = {ok} " +
+                                    $"(said: {problem ?? "nothing"})");
+        }
+        catch (Exception ex)
+        {
+            // A read-only program directory is precisely what this check is about, so being unable to stage the
+            // probe there is a reason to skip rather than to fail: the check has no evidence either way.
+            ok = true;
+            SelfCheckLog.AppendLine($"save directory: SKIPPED - could not stage the probe " +
+                                    $"({ex.GetType().Name}); the program directory is not writable, which is " +
+                                    "the situation under test");
+        }
+        finally
+        {
+            _settings.SaveDirectory = original;
+            try
+            {
+                File.Delete(blocker);
+            }
+            catch (Exception)
+            {
+                // Leaving a probe file behind is not worth failing a self-check over.
+            }
+        }
+
+        return ok;
+    }
     private static void SetText(int id, string text)
     {
         IntPtr control = User32.GetDlgItem(_frame, id);
@@ -975,12 +1041,44 @@ internal static class MainWindow
         }
     }
 
+    /// <summary>
+    /// Makes sure the save directory exists, and says why not when it cannot.
+    /// </summary>
+    /// <remarks>
+    /// Separate from opening the folder so that the start-up check can use the same code without launching a
+    /// shell window. The failure worth catching is not a folder that will not open - it is a capture that cannot
+    /// be written, which a user would otherwise discover only after losing one. Both callers report the reason
+    /// rather than a bare exception name, because "access denied" and "an absolute path was configured and is
+    /// wrong" need different answers.
+    /// </remarks>
+    private static bool TryPrepareSaveDirectory(out string directory, out string? error)
+    {
+        directory = _settings.ResolveSaveDirectory();
+        try
+        {
+            Directory.CreateDirectory(directory);
+            error = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or
+                                   NotSupportedException or ArgumentException)
+        {
+            error = $"{ex.GetType().Name}: {ex.Message}";
+            return false;
+        }
+    }
+
     private static void OpenSaveFolder()
     {
         try
         {
-            string directory = _settings.ResolveSaveDirectory();
-            Directory.CreateDirectory(directory);
+            if (!TryPrepareSaveDirectory(out string directory, out string? problem))
+            {
+                AppendLog($"could not open the save folder: {problem}");
+                AppendLog($"  captures would not save there either. Set 'savedirectory' in {AppSettings.FileName} " +
+                          "to a writable path, or move the program to a location this account can write to.");
+                return;
+            }
 
             // explorer.exe with the folder as an argument, rather than asking the shell to "open" the folder,
             // and with no null arguments. The previous version asked the shell to open the directory, passed

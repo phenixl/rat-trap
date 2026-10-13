@@ -82,6 +82,8 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 
 `rat-trap.ini` 存放在**可执行文件旁边**，这样整个程序都是便携的，而且每个值都能用文本编辑器直接改。如果程序目录不可写——比如解包在 `Program Files` 下——它会回退到 `%LOCALAPPDATA%\rat-trap`，并在日志里说明这一点，而不是悄悄把改动丢掉。
 
+**相对**的 `savedirectory` 遵循同一个回退，所以一份解压到不可写位置的便携副本依然能保存捕获结果——存到 `%LOCALAPPDATA%\rat-trap\captures`。而**绝对**路径会按原样遵守，即使它最后不可用——因为存到你没指定的地方，比告诉你"你选的位置写不进去"更糟。这项检查在**启动时**执行，而不是等到第一次保存，所以不可用的位置是在丢东西**之前**被报出来，而不是之后。
+
 ```ini
 [capture]
 target = cursor            ; 或者 crosshair

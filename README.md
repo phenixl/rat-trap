@@ -101,6 +101,12 @@ sound scheme the machine uses.
 `rat-trap.ini`, stored **beside the executable** so the whole program is portable and every value can be
 edited in a text editor. If the program directory is not writable — unpacked under `Program Files`, for
 instance — it falls back to `%LOCALAPPDATA%\rat-trap` and says so in the log rather than silently losing
+
+A **relative** `savedirectory` follows the same fallback, so a portable copy that is unpacked somewhere it
+cannot write still saves captures - into `%LOCALAPPDATA%\rat-trap\captures`. An **absolute** `savedirectory`
+is honoured as written even when it turns out to be unusable, because saving somewhere you did not ask for is
+worse than telling you that the place you chose cannot be written to. That check runs at start-up, not at the
+first save, so an unusable location is reported before a capture is lost rather than after.
 the change.
 
 ```ini
