@@ -59,6 +59,8 @@ internal sealed class CaptureSession : IDisposable
     private int _hotspotX;
     private int _hotspotY;
     private long _observedFrames;
+    private bool _reportedManualMode;
+    private bool _reportedHoles;
     private CaptureTarget _activeTarget;
     private MonitorDescriptor? _monitor;
 
@@ -143,6 +145,8 @@ internal sealed class CaptureSession : IDisposable
         _reopened = false;
         _lastShapeHash = 0;
         _reportedNoShape = false;
+        _reportedManualMode = false;
+        _reportedHoles = false;
         _elapsed.Restart();
 
         // Immediate feedback that the press was received. With the window hidden behind a fullscreen game
@@ -183,7 +187,11 @@ internal sealed class CaptureSession : IDisposable
         }
 
         _reconstructor = _activeTarget == CaptureTarget.Crosshair
-            ? new CursorReconstructor(new ReconstructionOptions { NeighbourDistance = _settings.CrosshairNeighbourDistance })
+            ? new CursorReconstructor(new ReconstructionOptions
+            {
+                NeighbourDistance = _settings.CrosshairNeighbourDistance,
+                MaxOffsetRadius = OffsetRadiusForCrosshair(_settings.CrosshairSize),
+            })
             : new CursorReconstructor();
 
         int side = _activeTarget == CaptureTarget.Crosshair
@@ -607,6 +615,38 @@ internal sealed class CaptureSession : IDisposable
     // Reconstruction
     // -----------------------------------------------------------------------------
 
+    /// <summary>
+    /// Offset-grid radius needed to model a crosshair square of the given side.
+    /// </summary>
+    /// <remarks>
+    /// The offset grid is cursor-local, and anything further from the centre than the radius does not merely
+    /// score badly - it never enters the model. A 500-pixel-wide viewfinder against the default radius of 96
+    /// therefore came out as a fragment: the outer pixels were dropped by an <c>if (Contains)</c> guard, the
+    /// result looked like a partly captured shape, and nothing said the grid was the cause.
+    /// <para>
+    /// Half the side is exactly enough, and this path only ever models that square, so it is arithmetic rather
+    /// than a guess. The options bound the radius at 512 and the crosshair side at 1024, so half the side is
+    /// always in range. The cost is quadratic and worth stating: the grid is 88 bytes per offset, so a
+    /// 256-pixel square is about 5.8 MB, the 500-pixel one about 22 MB, and the 1024 maximum about 92 MB.
+    /// </para>
+    /// </remarks>
+    private static int OffsetRadiusForCrosshair(int crosshairSize) => (crosshairSize + 1) / 2;
+    /// <summary>The hole fraction above which an automatically finishing capture keeps observing.</summary>
+    private const double HoleLimit = 0.02;
+
+    private double _optionsHoleLimit = HoleLimit;
+
+    /// <summary>
+    /// Whether a solved shape is complete enough for an automatic finish to accept it.
+    /// </summary>
+    /// <remarks>
+    /// Holes are unresolved pixels surrounded by covered ones, so they sit inside the figure. Opaque interiors are
+    /// covered and never count, which is why this does not reject a solid cursor: it fires on under-observation,
+    /// not on opacity. Only the automatic path consults it. Finishing by hand overrides it, because the
+    /// observation window exists precisely so that a person can look at the model and decide.
+    /// </remarks>
+    private static bool HolesAcceptable(ReconstructionReport report) =>
+        report.CoveredPixels == 0 || report.InteriorHoleFraction <= HoleLimit;
     private SessionStep ReconstructTick(double budget)
     {
         if (_source is null || _monitor is null || _reconstructor is null || _roi is null)
@@ -654,6 +694,23 @@ internal sealed class CaptureSession : IDisposable
         var solved = _reconstructor.Solve();
         if (solved.Success && solved.Cursor is { } candidate)
         {
+            if (_settings.AutoFinish && !HolesAcceptable(solved.Report))
+            {
+                // The shape came out with holes: pixels it needs that the evidence did not reach. Accepting it
+                // would produce the gaps that were reported as "the threshold is too low", so the capture keeps
+                // observing instead. It is said once, not every ten frames.
+                if (!_reportedHoles)
+                {
+                    _reportedHoles = true;
+                    _log($"a shape was solved but {solved.Report.InteriorHolePixels} of its " +
+                         $"{solved.Report.CoveredPixels} covered pixels are holes " +
+                         $"({solved.Report.InteriorHoleFraction:P1}, over the " +
+                         $"{_optionsHoleLimit:P1} limit), so the capture keeps observing rather than saving a " +
+                         "shape with gaps in it. Turn off 'Finish automatically' to accept it as it stands.");
+                }
+                return default;
+            }
+
             Cursor = candidate;
             _log(solved.Report.Describe());
             return Complete();
@@ -661,6 +718,26 @@ internal sealed class CaptureSession : IDisposable
 
         if (_elapsed.Elapsed.TotalSeconds >= budget)
         {
+            if (!_settings.AutoFinish)
+            {
+                // Manual mode: the budget is a progress report rather than a deadline, and the capture ends when
+                // somebody says so. Saying it every ten frames would fill the log, so it is said once.
+                if (!_reportedManualMode)
+                {
+                    _reportedManualMode = true;
+                    _log($"still accumulating after {budget:F0}s because automatic finish is off; " +
+                         "press the hot key or Stop when the observation view looks complete.");
+                    foreach (string note in solved.Report.Notes)
+                    {
+                        _log(note);
+                    }
+                }
+                Status = $"Accumulating: {_reconstructor.FramesObserved} frames, " +
+                         $"{_elapsed.Elapsed.TotalSeconds:F0}s - press the hot key to finish";
+                Detail = "Automatic finish is off. Watch the observation window and finish when it looks right.";
+                return default;
+            }
+
             foreach (string note in solved.Report.Notes)
             {
                 _log(note);
@@ -694,7 +771,13 @@ internal sealed class CaptureSession : IDisposable
         if (_roiRect.Width == 0)
         {
             _roiRect = rect;
+            int radius = OffsetRadiusForCrosshair(_settings.CrosshairSize);
+            long gridOffsets = (long)((2 * radius) + 1) * ((2 * radius) + 1);
             _log($"crosshair: watching {rect} ({rect.Width}x{rect.Height}) at the centre of {source}");
+            // Stated rather than left to be discovered: the grid has to cover the whole square or the outer
+            // pixels are not modelled at all, and covering it costs 88 bytes per offset.
+            _log($"crosshair: the offset grid is {(2 * radius) + 1}x{(2 * radius) + 1} " +
+                 $"({gridOffsets * 88 / 1024.0 / 1024.0:F1} MB), sized to cover the square");
             Status = "Watching for a crosshair...";
             Detail = "Aim at something that moves, so the scene behind the crosshair changes.";
         }
@@ -703,8 +786,11 @@ internal sealed class CaptureSession : IDisposable
             // The geometry a crosshair sits on has to be stable for the accumulation to mean anything:
             // an offset must always refer to the same screen pixel.
             _log($"the watched window moved ({_roiRect} -> {rect}); restarting the accumulation");
-            _reconstructor = new CursorReconstructor(
-                new ReconstructionOptions { NeighbourDistance = _settings.CrosshairNeighbourDistance });
+            _reconstructor = new CursorReconstructor(new ReconstructionOptions
+            {
+                NeighbourDistance = _settings.CrosshairNeighbourDistance,
+                MaxOffsetRadius = OffsetRadiusForCrosshair(_settings.CrosshairSize),
+            });
             _roiRect = rect;
         }
 
@@ -740,6 +826,20 @@ internal sealed class CaptureSession : IDisposable
         var solved = _reconstructor.Solve();
         if (solved.Success && solved.Cursor is { } candidate)
         {
+            if (_settings.AutoFinish && !HolesAcceptable(solved.Report))
+            {
+                if (!_reportedHoles)
+                {
+                    _reportedHoles = true;
+                    _log($"a shape was solved but {solved.Report.InteriorHolePixels} of its " +
+                         $"{solved.Report.CoveredPixels} covered pixels are holes " +
+                         $"({solved.Report.InteriorHoleFraction:P1}, over the " +
+                         $"{_optionsHoleLimit:P1} limit), so the capture keeps watching rather than saving a " +
+                         "shape with gaps in it. Turn off 'Finish automatically' to accept it as it stands.");
+                }
+                return default;
+            }
+
             Cursor = candidate;
             _log(solved.Report.Describe());
             if (_settings.VerboseModelMap)
@@ -754,6 +854,24 @@ internal sealed class CaptureSession : IDisposable
 
         if (_elapsed.Elapsed.TotalSeconds >= _settings.ReconstructSeconds)
         {
+            if (!_settings.AutoFinish)
+            {
+                if (!_reportedManualMode)
+                {
+                    _reportedManualMode = true;
+                    _log($"still watching after {_settings.ReconstructSeconds:F0}s because automatic finish is " +
+                         "off; press the hot key or Stop when the observation view looks complete.");
+                    foreach (string note in solved.Report.Notes)
+                    {
+                        _log(note);
+                    }
+                }
+                Status = $"Watching: {_reconstructor.FramesObserved} frames, " +
+                         $"{_elapsed.Elapsed.TotalSeconds:F0}s - press the hot key to finish";
+                Detail = "Automatic finish is off. Watch the observation window and finish when it looks right.";
+                return default;
+            }
+
             foreach (string note in solved.Report.Notes)
             {
                 _log(note);

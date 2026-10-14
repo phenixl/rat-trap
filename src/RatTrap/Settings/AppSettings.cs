@@ -112,6 +112,18 @@ public sealed class AppSettings
     /// <summary>How long to accumulate observations before solving, in seconds.</summary>
     public int ReconstructSeconds { get; set; } = 8;
 
+    /// <summary>
+    /// Whether a capture finishes by itself once <see cref="ReconstructSeconds"/> has elapsed.
+    /// </summary>
+    /// <remarks>
+    /// On by default, which is the behaviour the tool always had. Turned off, a capture runs until the hot key or
+    /// the button stops it, which is the mode for judging the result before accepting it: the observation window
+    /// exists to let a person watch the model fill in, and the moment that stops being a spectator sport is the
+    /// moment they want to decide when it is done rather than being told. The state is persisted so the choice
+    /// survives a restart; it does not silently revert to the default on the next run.
+    /// </remarks>
+    public bool AutoFinish { get; set; } = true;
+
     /// <summary>Shrink the saved cursor to its alpha bounding box.</summary>
     public bool Trim { get; set; } = false;
 
@@ -408,6 +420,7 @@ public sealed class AppSettings
             case "startsound": StartSound = value; break;
             case "stopsound": StopSound = value; break;
             case "reconstructseconds": ReconstructSeconds = ParseInt(value, ReconstructSeconds); break;
+            case "autofinish": AutoFinish = ParseBool(value, AutoFinish); break;
             case "trim": Trim = ParseBool(value, Trim); break;
             case "nudgepointer": NudgePointer = ParseBool(value, NudgePointer); break;
             case "crosshairsize": CrosshairSize = ParseInt(value, CrosshairSize); break;
@@ -518,6 +531,9 @@ public sealed class AppSettings
         text.AppendLine($"savesound = {SaveSound}");
         text.AppendLine($"; how long to accumulate observations before solving, in seconds");
         text.AppendLine($"reconstructseconds = {ReconstructSeconds}");
+        text.AppendLine("; true finishes a capture by itself when the budget above elapses; false runs until the");
+        text.AppendLine("; hot key or the button stops it, so the result can be judged before it is accepted");
+        text.AppendLine($"autofinish = {Bool(AutoFinish)}");
         text.AppendLine($"trim = {Bool(Trim)}");
         text.AppendLine($"nudgepointer = {Bool(NudgePointer)}");
         text.AppendLine($"verbosemodelmap = {Bool(VerboseModelMap)}");
@@ -547,7 +563,8 @@ public sealed class AppSettings
     /// <summary>One-line summary for the log.</summary>
     public string Describe()
         => $"target={Target}, out={ResolveSaveDirectory()}, hotkey={(HotKeyEnabled ? HotKey : "off")}, " +
-           $"autosave={AutoSave}, sound={PlaySound}";
+           $"autosave={AutoSave}, sound={PlaySound}, " +
+           $"autofinish={(AutoFinish ? $"after {ReconstructSeconds}s" : "off (finish by hand)")}";
 }
 
 

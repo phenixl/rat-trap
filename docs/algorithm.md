@@ -432,3 +432,52 @@ The compositor reports a shape when it **changes**. A cursor that was already on
 started may therefore report nothing until it moves, which is why the session reopens the duplication session
 and can nudge the pointer one pixel. In cursor mode this means the observation window can sit empty for a
 moment even when reconstruction will eventually run - the panels are not broken, they are waiting.
+
+## 15. Why a wide crosshair came back in pieces, and what "too low a threshold" turned out to mean
+
+Three faults reported together, and they had three different causes. Writing them down because two of them
+looked like the same fault and were not.
+
+### The offset grid is a silent limit, and that is what broke the viewfinder
+
+The cursor-local offset grid has a radius, 96 by default, and offsets beyond it were skipped by an
+`if (_offsets.Contains(rx, ry))` guard. Skipped means **never entering the model**: not scored badly, not
+refused, absent. A crosshair of 500 by 339 therefore lost everything more than 96 pixels from its centre, and
+the result was a fragment with nothing anywhere to explain it.
+
+Half the square's side is exactly the radius it needs, and this path only ever models that square, so crosshair
+mode now derives the radius instead of taking the default. The cost is quadratic and is stated in the log
+rather than left to be discovered: the grid is 88 bytes per offset, so a 256-pixel square is about 5.8 MB, the
+500-pixel one about 22 MB, and the 1024 maximum about 92 MB.
+
+The second half of the fix matters more than the first. Any offset still outside the grid is now counted, and
+the count is reported on **every** return path including the earliest refusal. The first version added the note
+near the classification, past an early return, so the case where the grid was the only thing that had happened -
+every observed pixel outside it, nothing recorded - produced a refusal that never mentioned the grid. The most
+useful diagnostic was missing exactly when it was the only one available.
+
+### Burrs are noise, and noise is local
+
+A covered pixel with almost no covered neighbours is the mask contradicting itself about its own
+neighbourhood. Requiring two covered neighbours removes singletons and isolated pairs while leaving a
+one-pixel-wide line intact, whose interior pixels have two neighbours along the line. It deliberately does
+**not** require connectivity: a viewfinder built from four corner brackets is legitimately four components and
+a cursor with a badge is two, so demanding one blob would reject exactly the shapes this has to support.
+
+The first version of this converted speckle to `Unresolved`, which was wrong in a way worth recording:
+`CoveredPixels` counts everything that is not transparent, so an unresolved pixel is still covered. The burr
+stayed in the output, the totals did not move, and the same pixel was then offered to the hole metric as
+evidence of a gap. Noise has to leave the covered set entirely, so speckle becomes `Transparent`.
+
+### Gaps are not a threshold, they are missing evidence
+
+A hole is an unresolved pixel surrounded by covered ones, so it sits inside the figure. Filtering cannot fill
+it: the evidence did not reach, and the only cure is to keep observing. So the hole count is measured, reported,
+and used to hold off the **automatic** finish - a shape with too many holes keeps being observed instead of
+being accepted, which is what "the threshold is too low" was asking for, expressed as a property of the result
+rather than as a number turned up until the symptom went away.
+
+Opaque interiors are covered and are never counted as holes, which is why this does not reject a solid cursor:
+it fires on under-observation, not on opacity. Finishing by hand overrides it, because the whole point of the
+observation window is that a person can look at the model and decide - and `autofinish = false` is how they say
+so in advance.

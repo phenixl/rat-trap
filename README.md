@@ -85,6 +85,7 @@ covered in [docs/development.md](docs/development.md).
 | **Open folder** | Opens the save directory in Explorer. |
 | **Crosshair width (px)** | The side of the square crosshair mode watches, 32-1024, saved as you leave the field. It is fixed for the duration of a capture - the accumulator is keyed to the region - so a change made while running takes effect on the next Start. |
 | **Observe...** | Opens a floating observation window showing the reconstruction in progress: three panels side by side, plus a transport to pause, step one frame either way and jump to either end. The window is owned by the main window, so it floats above it and closes with it, while still being draggable to another monitor. Pausing freezes the view; the capture keeps recording. |
+| **Finish automatically** | Checked, a capture ends by itself once the time budget elapses. Unchecked, it runs until the hot key or the button stops it, so you can watch the observation window and decide when the model is complete. The choice is saved, so it survives a restart. |
 | **Global hot key** | `Ctrl+Insert` by default, changeable in `rat-trap.ini`. Works while a game has focus, which is the point: pressing it does not steal focus from the game. |
 | Log | Each new line is appended and scrolled into view. |
 
@@ -120,7 +121,8 @@ playsound = true
 startsound = builtin
 stopsound = builtin
 savesound = builtin
-reconstructseconds = 8
+reconstructseconds = 8  ; ignored while autofinish is false
+autofinish = true     ; false runs until the hot key stops it
 trim = false
 nudgepointer = true
 

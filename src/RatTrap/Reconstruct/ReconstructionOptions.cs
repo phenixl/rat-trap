@@ -190,6 +190,32 @@ public sealed record ReconstructionOptions
     public int MinPairs { get; init; } = 6;
 
     /// <summary>
+    /// How many of a covered pixel's eight neighbours must also be covered for it to stay covered.
+    /// </summary>
+    /// <remarks>
+    /// This is the anti-speckle rule, and it is deliberately local rather than a shape test. An isolated covered
+    /// pixel states that the mask disagrees with itself about its own neighbourhood, which is noise; requiring
+    /// two covered neighbours removes singletons and isolated pairs while leaving a one-pixel-wide line intact,
+    /// whose interior pixels have two neighbours along the line. It does <b>not</b> require connectivity: a
+    /// viewfinder built from four corner brackets is legitimately four components, and a cursor with a badge is
+    /// two, so demanding one blob would reject exactly the shapes this has to support. Zero disables it.
+    /// </remarks>
+    public int MinCoveredNeighbours { get; init; } = 2;
+
+    /// <summary>
+    /// Fraction of covered pixels allowed to be holes - unresolved pixels inside the shape - before the result is
+    /// treated as incomplete.
+    /// </summary>
+    /// <remarks>
+    /// The other half of "gaps and burrs": speckle is noise and the rule above removes it, while a hole is a
+    /// pixel the shape needs and the evidence did not reach. A hole cannot be fixed by filtering, only by
+    /// observing more, so it is measured and reported and the automatic finish is held off while it is over this
+    /// fraction. Opaque interiors do not count: an opaque pixel is legitimately covered without evidence, so it is
+    /// never a hole.
+    /// </remarks>
+    public double MaxInteriorHoleFraction { get; init; } = 0.02;
+
+    /// <summary>
     /// Minimum summed background variance across the three channels for the slope to be
     /// considered identified. Below this the background simply did not vary enough under the
     /// cursor, and alpha is not recoverable at that pixel.
@@ -275,6 +301,15 @@ public sealed record ReconstructionReport
     public required int XorMaskedPixels { get; init; }
     public required int UnresolvedPixels { get; init; }
     public required int PairsRecorded { get; init; }
+
+    /// <summary>Covered pixels removed because too few of their neighbours were covered.</summary>
+    public int SpeckleRemovedPixels { get; init; }
+
+    /// <summary>Unresolved pixels that sit inside the shape, surrounded by covered ones.</summary>
+    public int InteriorHolePixels { get; init; }
+
+    /// <summary>Fraction of covered pixels that are holes. Zero when nothing is covered.</summary>
+    public double InteriorHoleFraction => CoveredPixels == 0 ? 0 : (double)InteriorHolePixels / CoveredPixels;
     public required RECT AccumulationBounds { get; init; }
     public required POINT HotspotMin { get; init; }
     public required POINT HotspotMax { get; init; }
@@ -299,6 +334,8 @@ public sealed record ReconstructionReport
             $"  XOR masked      = {XorMaskedPixels}",
             $"  unresolved      = {UnresolvedPixels}",
             $"  transparent     = {TransparentPixels}",
+            $"  speckle removed = {SpeckleRemovedPixels}",
+            $"  holes inside    = {InteriorHolePixels} ({InteriorHoleFraction:P2} of covered)",
             $"pairs recorded    = {PairsRecorded}",
             $"accumulation area = {AccumulationBounds}",
             $"hotspot range     = {HotspotMin} .. {HotspotMax}",

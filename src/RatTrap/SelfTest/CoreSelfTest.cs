@@ -36,6 +36,8 @@ internal static class CoreSelfTest
         ObservationViewReportsProgress(lines);
         HistoryRingIsBounded(lines);
         ReplayCursorBehaviour(lines);
+        LargeViewfinderIsModelled(lines);
+        SpeckleIsRemovedAndGoodShapesAreNotHeldBack(lines);
         return lines;
     }
 
@@ -1340,6 +1342,179 @@ internal static class CoreSelfTest
             grown.Resolve(3) == 2, $"resolved to {grown.Resolve(3)}");
 
         lines.Add($"  replay cursor: {cursor.Steps + empty.Steps + grown.Steps} steps exercised");
+    }
+    /// <summary>
+    /// Checks that a wide viewfinder-style crosshair is actually modelled, and that losing it is not silent.
+    /// </summary>
+    /// <remarks>
+    /// Reported as "a 500x339 camera-viewfinder crosshair fails to capture". The cause was arithmetic: the
+    /// cursor-local offset grid was fixed at the default radius of 96, so anything further than 96 pixels from
+    /// the centre never entered the model, and a 500-pixel-wide frame lost its outer third to an
+    /// <c>if (Contains)</c> guard with nothing said about it. Two things had to become true, so both are
+    /// asserted here: the grid must be sized from the square, and pixels that still fall outside it must be
+    /// counted and explained rather than dropped in silence.
+    /// </remarks>
+    private static void LargeViewfinderIsModelled(List<string> lines)
+    {
+        const int size = 512;
+        const int frameWidth = 300;
+        const int frameHeight = 200;
+        const int stroke = 2;
+        var scene = new ArgbBitmap(size, size);
+        RECT roi = RECT.FromSize(2000, 2000, size, size);
+        int centre = size / 2;
+
+        // The old behaviour: the default radius, which is what every crosshair used to get.
+        var narrow = new CursorReconstructor(new ReconstructionOptions { NeighbourDistance = 9 });
+        for (int frame = 0; frame < 24; frame++)
+        {
+            BuildSlowScene(scene, frame);
+            StampViewfinder(scene, centre, centre, frameWidth, frameHeight, stroke);
+            narrow.Observe(roi, scene, roi.Left + centre, roi.Top + centre, BackgroundSource.SpatialNeighbourMedian);
+        }
+        ReconstructionResult narrowResult = narrow.Solve();
+
+        lines.Add($"  viewfinder on the default grid: {narrow.OffsetGridSide}x{narrow.OffsetGridSide}, " +
+                  $"{narrow.OffsetsOutsideGrid} pixels outside it, " +
+                  $"{narrowResult.Report.CoveredPixels} covered");
+        CheckTrue(lines, "a frame wider than the grid loses pixels",
+            narrow.OffsetsOutsideGrid > 0,
+            "nothing was reported outside the grid, so this test would prove nothing");
+        CheckTrue(lines, "the loss is named in the report",
+            narrowResult.Report.Notes.Any(n => n.Contains("cursor-local grid", StringComparison.Ordinal)),
+            "the report does not mention the grid: " + string.Join(" | ", narrowResult.Report.Notes));
+
+        // The fix: the radius the session now derives from the square's side.
+        int radius = (size + 1) / 2;
+        var wide = new CursorReconstructor(new ReconstructionOptions
+        {
+            NeighbourDistance = 9,
+            MaxOffsetRadius = radius,
+        });
+        for (int frame = 0; frame < 24; frame++)
+        {
+            BuildSlowScene(scene, frame);
+            StampViewfinder(scene, centre, centre, frameWidth, frameHeight, stroke);
+            wide.Observe(roi, scene, roi.Left + centre, roi.Top + centre, BackgroundSource.SpatialNeighbourMedian);
+        }
+        ReconstructionResult wideResult = wide.Solve();
+
+        lines.Add($"  viewfinder on a grid sized to the square: {wide.OffsetGridSide}x{wide.OffsetGridSide}, " +
+                  $"{wide.OffsetsOutsideGrid} pixels outside it, " +
+                  $"{wideResult.Report.CoveredPixels} covered");
+        CheckTrue(lines, "a grid sized from the square loses nothing",
+            wide.OffsetsOutsideGrid == 0, $"{wide.OffsetsOutsideGrid} pixels still fell outside");
+        CheckTrue(lines, "the wide frame is modelled rather than refused", wideResult.Success,
+            "the solver produced nothing for a frame it can now represent");
+
+        // And the outer edge specifically, which is what used to be dropped.
+        if (wideResult.Cursor is { } cursor)
+        {
+            int leftEdge = cursor.HotspotX - (frameWidth / 2);
+            int midY = cursor.HotspotY;
+            bool edgeCovered = leftEdge >= 0 && leftEdge < cursor.Width &&
+                               cursor.Image.GetPixel(leftEdge, midY).A > 0;
+            lines.Add($"  viewfinder outer edge at offset -{frameWidth / 2} recovered: {edgeCovered}");
+            CheckTrue(lines, "the outer edge of the frame is recovered", edgeCovered,
+                "the left edge of the viewfinder came back transparent");
+        }
+    }
+
+    /// <summary>Draws a thin rectangle outline, standing in for a camera-viewfinder crosshair.</summary>
+    private static void StampViewfinder(ArgbBitmap frame, int centreX, int centreY, int width, int height, int stroke)
+    {
+        int halfWidth = width / 2;
+        int halfHeight = height / 2;
+        for (int offset = 0; offset < stroke; offset++)
+        {
+            int left = centreX - halfWidth + offset;
+            int right = centreX + halfWidth - offset;
+            int top = centreY - halfHeight + offset;
+            int bottom = centreY + halfHeight - offset;
+            for (int x = left; x <= right; x++)
+            {
+                Plot(frame, x, top);
+                Plot(frame, x, bottom);
+            }
+            for (int y = top; y <= bottom; y++)
+            {
+                Plot(frame, left, y);
+                Plot(frame, right, y);
+            }
+        }
+    }
+
+    private static void Plot(ArgbBitmap frame, int x, int y)
+    {
+        if (x >= 0 && y >= 0 && x < frame.Width && y < frame.Height)
+        {
+            frame.SetPixel(x, y, new ArgbPixel(0, 255, 0, 255));
+        }
+    }
+    /// <summary>
+    /// Checks that stray covered pixels are removed, and that a clean shape is not caught by the same rule.
+    /// </summary>
+    /// <remarks>
+    /// Reported as "the success threshold is too low, so the final image has gaps and burrs". Burrs are the half
+    /// that filtering can fix: an isolated covered pixel asserts that the mask disagrees with itself about its own
+    /// neighbourhood. The scene here is a clean crosshair with deliberate isolated specks beside it, so the same
+    /// run proves both directions - the specks go, and the shape stays. The second half is the more important
+    /// guard: the hole rule holds back an automatic finish, so a clean capture must come out with no holes at all,
+    /// or the rule would block good results rather than bad ones.
+    /// </remarks>
+    private static void SpeckleIsRemovedAndGoodShapesAreNotHeldBack(List<string> lines)
+    {
+        const int size = 256;
+        var scene = new ArgbBitmap(size, size);
+        RECT roi = RECT.FromSize(3000, 3000, size, size);
+        int centre = size / 2;
+
+        var strict = new CursorReconstructor(new ReconstructionOptions { NeighbourDistance = 9 });
+        var permissive = new CursorReconstructor(new ReconstructionOptions
+        {
+            NeighbourDistance = 9,
+            MinCoveredNeighbours = 0,
+        });
+
+        for (int frame = 0; frame < 24; frame++)
+        {
+            BuildSlowScene(scene, frame);
+            StampViewfinder(scene, centre, centre, 60, 60, 2);
+
+            // Deliberate specks, well clear of the frame: one pixel, and a pair, which are exactly the shapes the
+            // rule is meant to reject while leaving a one-pixel-wide line alone.
+            Plot(scene, centre + 90, centre + 90);
+            Plot(scene, centre - 95, centre + 60);
+            Plot(scene, centre - 96, centre + 60);
+
+            strict.Observe(roi, scene, roi.Left + centre, roi.Top + centre, BackgroundSource.SpatialNeighbourMedian);
+            permissive.Observe(roi, scene, roi.Left + centre, roi.Top + centre, BackgroundSource.SpatialNeighbourMedian);
+        }
+
+        ReconstructionResult strictResult = strict.Solve();
+        ReconstructionResult permissiveResult = permissive.Solve();
+
+        lines.Add($"  speckle: strict covered={strictResult.Report.CoveredPixels} " +
+                  $"removed={strictResult.Report.SpeckleRemovedPixels}, " +
+                  $"permissive covered={permissiveResult.Report.CoveredPixels}");
+
+        CheckTrue(lines, "isolated specks are removed",
+            strictResult.Report.SpeckleRemovedPixels > 0,
+            "nothing was removed, so the specks were either not covered or not isolated");
+        CheckTrue(lines, "removing them makes the shape smaller",
+            strictResult.Report.CoveredPixels < permissiveResult.Report.CoveredPixels,
+            $"{strictResult.Report.CoveredPixels} vs {permissiveResult.Report.CoveredPixels} covered");
+        CheckTrue(lines, "the removal is explained",
+            strictResult.Report.Notes.Any(n => n.Contains("speckle", StringComparison.Ordinal)),
+            "the report does not mention speckle: " + string.Join(" | ", strictResult.Report.Notes));
+
+        // The guard that matters most: a clean square must produce no holes, or the automatic finish would be held
+        // back on a good capture.
+        lines.Add($"  clean square holes={strictResult.Report.InteriorHolePixels} " +
+                  $"({strictResult.Report.InteriorHoleFraction:P2} of covered)");
+        CheckTrue(lines, "a clean shape has no holes",
+            strictResult.Report.InteriorHolePixels == 0,
+            $"{strictResult.Report.InteriorHolePixels} holes in a shape that was observed cleanly");
     }
     private static void Check(List<string> lines, string what, int expected, int actual)
     {

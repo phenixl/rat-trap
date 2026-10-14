@@ -71,6 +71,7 @@ dotnet publish src\RatTrap\RatTrap.csproj -c Release -r win-x64 -o publish
 | **Open folder** | 在资源管理器中打开保存目录。 |
 | **Crosshair width (px)** | 准星模式所观察方块的边长，32–1024，离开输入框时即保存。捕获进行中该值固定（累加器以该区域为键），因此运行中修改会在下次 Start 时生效。 |
 | **Observe...** | 打开一个浮动的观察窗口：三格面板平排展示正在进行的重建，另有传输条可暂停、前后单步、跳到两端。该窗口由主窗口拥有，因此浮在它之上并随它一起关闭，同时仍可拖到另一个显示器。暂停只冻结**画面**，捕获仍在录制。 |
+| **Finish automatically** | 勾选时，捕获在时间预算用尽后自行结束。取消勾选后，它会一直运行到热键或按钮将它停止，因此你可以看着观察窗口、自己判断模型何时完整。该选择会被保存，重启后依然生效。 |
 | **Global hot key** | 默认 `Ctrl+Insert`，可在 `rat-trap.ini` 中修改。在游戏持有焦点时依然有效，而这正是关键：按下它不会把焦点从游戏里抢走。 |
 | Log | 每一条新日志被追加并滚动到可见位置。 |
 
@@ -95,7 +96,8 @@ playsound = true
 startsound = builtin
 stopsound = builtin
 savesound = builtin
-reconstructseconds = 8
+reconstructseconds = 8  ; autofinish 为 false 时此项被忽略
+autofinish = true     ; false 表示一直运行到热键停止
 trim = false
 nudgepointer = true
 

@@ -67,6 +67,7 @@ public sealed class CursorReconstructor
     private bool _hasHotspot;
     private int _minHotspotX, _minHotspotY, _maxHotspotX, _maxHotspotY;
     private int _clippedObservations;
+    private long _offsetsOutsideRadius;
     private BackgroundSource _backgroundSource = BackgroundSource.TemporalMedian;
 
     /// <summary>
@@ -158,6 +159,20 @@ public sealed class CursorReconstructor
 
     /// <summary>Number of screen pixels with a background estimate.</summary>
     public int BackgroundPixelCount => _background?.EstablishedPixelCount ?? 0;
+
+    /// <summary>
+    /// Observed cursor pixels that fell outside the cursor-local grid and could not be modelled at all.
+    /// </summary>
+    /// <remarks>
+    /// Reported because the alternative is what happened: a crosshair wider than the offset grid simply lost its
+    /// outer pixels, the result looked like a partially captured shape, and nothing anywhere said that the
+    /// grid was the reason. The grid is a configuration limit rather than a refusal, and a limit the user can
+    /// see is a limit they can fix.
+    /// </remarks>
+    public long OffsetsOutsideGrid => _offsetsOutsideRadius;
+
+    /// <summary>Side of the cursor-local offset grid, so callers can report the extent it can model.</summary>
+    public int OffsetGridSide => _offsets.Side;
 
     public int FramesObserved => _framesObserved;
 
@@ -328,7 +343,13 @@ public sealed class CursorReconstructor
                 // unverifiable pairs out of the least-squares fit.
                 if (outcome == BackgroundObservation.Foreground && _settleFramesRemaining == 0 && backgroundTrustworthy)
                 {
-                    if (_offsets.Contains(rx, ry))
+                    if (!_offsets.Contains(rx, ry))
+                    {
+                        // Not a refusal: this pixel lies outside the grid this run was configured with, so it is
+                        // counted and reported rather than silently dropped.
+                        _offsetsOutsideRadius++;
+                    }
+                    else
                     {
                         _offsets.Cell(rx, ry).Add(backgroundEstimate, observed);
                         _pairsRecorded++;
@@ -482,6 +503,18 @@ public sealed class CursorReconstructor
     {
         var notes = new List<string>(_notes);
 
+        // Added here rather than beside the classification, and that placement is the whole point. It used to sit
+        // further down, past an early return, so the one case where the grid was the *only* thing that happened -
+        // every observed pixel outside it, nothing recorded - produced a refusal that did not mention the grid at
+        // all. The most useful diagnostic was missing exactly when it was the only one available.
+        if (_offsetsOutsideRadius > 0)
+        {
+            notes.Add($"{_offsetsOutsideRadius} observed cursor pixels fell outside the " +
+                      $"{_offsets.Side}x{_offsets.Side} cursor-local grid and were not modelled at all, so any " +
+                      "gap at the edge of the shape is that limit rather than missing evidence. Raise " +
+                      "MaxOffsetRadius; crosshair mode derives it from the square's side.");
+        }
+
         if (_background is null || _pairsRecorded == 0)
         {
             notes.Add("refused to produce a cursor: no (background, composite) pairs were recorded, so there " +
@@ -572,6 +605,120 @@ public sealed class CursorReconstructor
             }
         }
 
+        // --- Speckle and holes -------------------------------------------------------------------------
+        // Applied after classification and before the result is judged, because a covered pixel with almost no
+        // covered neighbours is a statement the mask makes about itself and then contradicts. The neighbour count
+        // is taken from a snapshot so the outcome does not depend on the order pixels are visited in.
+        var coveredSnapshot = new bool[models.Length];
+        for (int i = 0; i < models.Length; i++)
+        {
+            coveredSnapshot[i] = models[i].Kind != PixelModelKind.Transparent;
+        }
+
+        int speckleRemoved = 0;
+        if (_options.MinCoveredNeighbours > 0)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int index = (y * width) + x;
+                    if (!coveredSnapshot[index])
+                    {
+                        continue;
+                    }
+
+                    int neighbours = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            if (dx == 0 && dy == 0)
+                            {
+                                continue;
+                            }
+                            int nx = x + dx;
+                            int ny = y + dy;
+                            if (nx >= 0 && ny >= 0 && nx < width && ny < height && coveredSnapshot[(ny * width) + nx])
+                            {
+                                neighbours++;
+                            }
+                        }
+                    }
+
+                    if (neighbours >= _options.MinCoveredNeighbours)
+                    {
+                        continue;
+                    }
+
+                    // Move it out of the covered set, and keep every counter and the image consistent with that.
+                    PixelModel speckle = models[index];
+                    switch (speckle.Kind)
+                    {
+                        case PixelModelKind.AlphaSolved: alphaSolved--; alphaSum -= speckle.Alpha; break;
+                        case PixelModelKind.OpaqueAssumed: opaqueAssumed--; alphaSum -= 1; break;
+                        case PixelModelKind.XorMasked: xorMasked--; alphaSum -= 1; break;
+                        case PixelModelKind.Unresolved: unresolved--; alphaSum -= 1; break;
+                    }
+                    // Transparent, not unresolved. A pixel dropped as speckle has been judged not to be part of
+                    // the shape, and "unresolved" still counts as covered - so the first version of this left the
+                    // burr in the result, unchanged in the reported totals, and then offered the same pixel to the
+                    // hole metric as evidence of a gap. Noise has to leave the covered set entirely.
+                    transparent++;
+                    models[index] = new PixelModel(PixelModelKind.Transparent, 0, ArgbPixel.Transparent, 0);
+                    speckleRemoved++;
+
+                    int pixel = index * 4;
+                    image.Pixels[pixel] = 0;
+                    image.Pixels[pixel + 1] = 0;
+                    image.Pixels[pixel + 2] = 0;
+                    image.Pixels[pixel + 3] = 0;
+                    xorMask[pixel] = 0;
+                    xorMask[pixel + 1] = 0;
+                    xorMask[pixel + 2] = 0;
+                    xorMask[pixel + 3] = 0;
+                }
+            }
+        }
+
+        // A hole is an unresolved pixel the shape needs: it has covered neighbours, so it sits inside the figure
+        // rather than beside it. Opaque pixels are covered, so a solid interior is never counted as a hole.
+        int interiorHoles = 0;
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int index = (y * width) + x;
+                if (models[index].Kind != PixelModelKind.Unresolved)
+                {
+                    continue;
+                }
+
+                int neighbours = 0;
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dy == 0)
+                        {
+                            continue;
+                        }
+                        int nx = x + dx;
+                        int ny = y + dy;
+                        if (nx >= 0 && ny >= 0 && nx < width && ny < height &&
+                            models[(ny * width) + nx].Kind != PixelModelKind.Transparent &&
+                            models[(ny * width) + nx].Kind != PixelModelKind.Unresolved)
+                        {
+                            neighbours++;
+                        }
+                    }
+                }
+                if (neighbours >= 2)
+                {
+                    interiorHoles++;
+                }
+            }
+        }
         bool xorDominant = xorMasked > 0 && xorMasked >= 0.8 * (xorMasked + alphaSolved + opaqueAssumed + unresolved);
 
         // --- Refuse to emit something that cannot be a cursor --------------------------------
@@ -660,14 +807,33 @@ public sealed class CursorReconstructor
             notes.Add($"{opaqueAssumed + unresolved} pixels were assumed opaque because the background never " +
                       "varied under them. Move the pointer across a more textured area to solve them.");
         }
+        if (speckleRemoved > 0)
+        {
+            notes.Add($"{speckleRemoved} covered pixels had fewer than {_options.MinCoveredNeighbours} covered " +
+                      "neighbours and were treated as speckle rather than as part of the shape. Raise " +
+                      "MinCoveredNeighbours to be stricter, or set it to 0 to keep them.");
+        }
+        if (interiorHoles > 0)
+        {
+            notes.Add($"{interiorHoles} pixels inside the shape are holes: the shape needs them and the evidence " +
+                      "did not reach. This is the limit of what has been observed so far, not a filtering " +
+                      "problem - keep observing, or turn off automatic finish and finish when the observation " +
+                      "view looks complete.");
+        }
         if (_sceneChanges > 0)
         {
             notes.Add($"the scene changed {_sceneChanges} time(s); pairs recorded while the background model " +
                       "was settling were discarded.");
         }
 
-        return new ReconstructionResult(cursor,
-            BuildReport(notes, _background.Bounds, transparent, alphaSolved, opaqueAssumed, xorMasked, unresolved))
+        ReconstructionReport report = BuildReport(notes, _background.Bounds, transparent, alphaSolved,
+            opaqueAssumed, xorMasked, unresolved) with
+        {
+            SpeckleRemovedPixels = speckleRemoved,
+            InteriorHolePixels = interiorHoles,
+        };
+
+        return new ReconstructionResult(cursor, report)
         {
             KindMap = Array.ConvertAll(models, m => m.Kind),
             AlphaMap = Array.ConvertAll(models, m => (byte)Math.Clamp(m.Alpha * 255.0, 0, 255)),

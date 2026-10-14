@@ -45,6 +45,7 @@ internal static class MainWindow
     private const int IdHotKeyInfo = 1231;
     private const int IdCrosshairLabel = 1232;
     private const int IdCrosshairSize = 1233;
+    private const int IdAutoFinish = 1234;
 
     private const uint CaptureTimerId = 1;
     private const uint SelfCheckTimerId = 2;
@@ -64,6 +65,7 @@ internal static class MainWindow
     private const uint BM_GETCHECK = 0x00F0;
     private const uint BST_CHECKED = 1;
     private const uint BS_AUTORADIOBUTTON = 0x00000009;
+    private const uint BS_AUTOCHECKBOX = 0x00000003;
     private const uint WS_GROUP = 0x00020000;
 
     // --- window state -------------------------------------------------------------
@@ -253,8 +255,9 @@ internal static class MainWindow
 
         bool fieldWorks = CheckCrosshairField();
         bool saveReported = CheckSaveDirectoryIsReported();
+        bool autoFinishWorks = CheckAutoFinishToggle();
         bool ok = oneRow && radiosLevel && radiosRightOfButtons && horizontal && selfTestHidden && noGap &&
-                  fieldWorks && saveReported;
+                  fieldWorks && saveReported && autoFinishWorks;
         if (!ok)
         {
             SelfCheckLog.AppendLine("layout: FAIL - the target radios are not laid out horizontally on the button row");
@@ -501,6 +504,11 @@ internal static class MainWindow
         CreateControl(frame, instance, "EDIT", string.Empty, IdCrosshairSize,
             User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | User32.WS_BORDER | User32.ES_NUMBER);
 
+        // On by default, which is the behaviour this program always had. Off, a capture runs until the hot key
+        // stops it, so the result can be judged before it is accepted rather than after.
+        CreateControl(frame, instance, "BUTTON", "Finish automatically", IdAutoFinish,
+            User32.WS_CHILD | User32.WS_VISIBLE | User32.WS_TABSTOP | BS_AUTOCHECKBOX);
+
         // One toggle instead of a Start/Stop pair, "Open folder" instead of a browse dialog, and no
         // per-format export buttons: every format is written automatically the moment a cursor exists,
         // so a button for each one was three chances to lose the result.
@@ -523,7 +531,7 @@ internal static class MainWindow
         {
             foreach (int id in new[] { IdModeLabel, IdModeCursor, IdModeCrosshair, IdToggle, IdBrowse,
                                        IdSelfTest, IdObserve, IdLog, IdSaveDir, IdHotKeyInfo,
-                                       IdCrosshairLabel, IdCrosshairSize })
+                                       IdCrosshairLabel, IdCrosshairSize, IdAutoFinish })
             {
                 User32.SendMessageW(User32.GetDlgItem(frame, id), User32.WM_SETFONT,
                     (UIntPtr)(ulong)_font, new IntPtr(1));
@@ -549,6 +557,9 @@ internal static class MainWindow
         SetText(IdHotKeyInfo, _settings.HotKeyEnabled
             ? $"Hot key: {_settings.HotKey}"
             : "Hot key: disabled in rat-trap.ini");
+
+        User32.SendMessageW(User32.GetDlgItem(frame, IdAutoFinish), BM_SETCHECK,
+            _settings.AutoFinish ? (UIntPtr)BST_CHECKED : UIntPtr.Zero, IntPtr.Zero);
 
         RegisterHotKey(frame);
 
@@ -623,6 +634,7 @@ internal static class MainWindow
         int labelWidth = 132 * scale;
         Move(IdCrosshairLabel, labelLeft, secondRow, labelWidth, rowHeight);
         Move(IdCrosshairSize, labelLeft + labelWidth, secondRow, 72 * scale, rowHeight);
+        Move(IdAutoFinish, labelLeft + labelWidth + (72 * scale) + (gap * 3), secondRow, 160 * scale, rowHeight);
 
         int bottom = buttonHeight + (gap * 2);
         int contentTop = top + (rowHeight * 2) + gap;
@@ -833,6 +845,39 @@ internal static class MainWindow
         return ok;
     }
 
+    /// <summary>
+    /// Drives the "finish automatically" checkbox and checks it reaches the setting and persists.
+    /// </summary>
+    /// <remarks>
+    /// Driven through the control rather than by assigning the property, because the wiring is what can break: a
+    /// checkbox reports a click with notification zero, the new state has to be read back rather than assumed, and
+    /// the choice has to survive a restart - a setting that silently reverts to its default on the next run is
+    /// worse than one that was never offered. The user's own choice is restored and saved afterwards.
+    /// </remarks>
+    private static bool CheckAutoFinishToggle()
+    {
+        bool original = _settings.AutoFinish;
+        IntPtr box = User32.GetDlgItem(_frame, IdAutoFinish);
+        bool ok = box != IntPtr.Zero;
+
+        User32.SendMessageW(box, BM_SETCHECK, UIntPtr.Zero, IntPtr.Zero);
+        OnCommand(IdAutoFinish, 0);
+        ok &= !_settings.AutoFinish;
+
+        User32.SendMessageW(box, BM_SETCHECK, (UIntPtr)BST_CHECKED, IntPtr.Zero);
+        OnCommand(IdAutoFinish, 0);
+        ok &= _settings.AutoFinish;
+
+        // Restore, and prove the file agrees by reading it back.
+        User32.SendMessageW(box, BM_SETCHECK, original ? (UIntPtr)BST_CHECKED : UIntPtr.Zero, IntPtr.Zero);
+        _settings.AutoFinish = original;
+        _settings.Save();
+        bool persisted = File.ReadAllText(_settings.FilePath)
+            .Contains($"autofinish = {(original ? "true" : "false")}", StringComparison.Ordinal);
+
+        SelfCheckLog.AppendLine($"finish automatically: toggles the setting = {ok}, persisted = {persisted}");
+        return ok && persisted;
+    }
     private static string Mark(bool ok) => ok ? "ok" : "FAIL";
     /// <summary>
     /// Checks that an unusable save directory is reported instead of being promised.
@@ -913,6 +958,19 @@ internal static class MainWindow
                 _settings.Save();
                 CheckRadio(id);
                 AppendLog($"target set to {_settings.Target}; settings saved to {_settings.FilePath}");
+                break;
+
+            case IdAutoFinish:
+                // A checkbox reports itself on click with notification 0, so the new state is read back rather
+                // than assumed from a toggle of what was there before.
+                bool autoFinish = User32.SendMessageW(User32.GetDlgItem(_frame, IdAutoFinish), BM_GETCHECK,
+                    UIntPtr.Zero, IntPtr.Zero).ToInt64() == BST_CHECKED;
+                _settings.AutoFinish = autoFinish;
+                _settings.Save();
+                AppendLog(autoFinish
+                    ? $"a capture finishes by itself after {_settings.ReconstructSeconds}s; saved to " +
+                      $"{_settings.FilePath}"
+                    : $"a capture now runs until the hot key or Stop finishes it; saved to {_settings.FilePath}");
                 break;
 
             case IdCrosshairSize:
