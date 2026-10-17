@@ -254,3 +254,36 @@ instead, reporting a flat-colour capture area together with the likely causes.
 Screen capture itself is not restricted by integrity level: it reads the composited desktop, which is a
 session object rather than a per-process one, and both backends were verified unelevated. So the project
 does not require administrator.
+
+## 13. The integrity boundary is not a capture boundary
+
+Asked after capturing a pointer over an application running elevated from a process that was not: the screen
+should be off limits, yet the cursor came back. The premise is the part that is wrong, and it is worth writing
+down because it is the natural assumption.
+
+UIPI - the integrity mechanism behind UAC - prevents a lower-integrity process from **sending messages** to a
+higher one, **driving its windows**, and **opening its process with write access**. It does not filter what the
+compositor draws. Desktop Duplication returns the desktop composition for the output, and the composition is
+per session, not per integrity level, so a normal process duplicating the display sees windows belonging to
+elevated processes. The pointer shape channel comes from the same composition, which is why the cursor arrives
+too. This is why screen capture tools do not ask to run elevated, and it is consistent with what was observed
+here rather than contradicting it. `[reasoned from the documented behaviour of the API and reported by the
+user; not measured against a deliberately elevated test process - this session could not elevate]`
+
+The boundaries that **do** stop capture are different ones, and worth knowing because they are not
+workarounds-solvable:
+
+* **A different session**. Services, other logged-in users and the logon screen are not this session, and their
+  composition is not reachable by duplicating this session's output.
+* **The secure desktop**. The UAC consent prompt switches to its own desktop; duplicating the normal desktop
+  yields nothing useful while it is up.
+* **Protected output**. Content whose protection the display driver honours comes back black, by design, and
+  that includes some streaming and playback surfaces.
+* **Outputs that do not support duplication**. Already handled as a fallible condition with a diagnostic, and
+  listed in section 9 rather than assumed.
+
+So: capturing an elevated application's window, and its cursor, from an unelevated process is expected
+behaviour rather than a leak. It is also why nothing in this program asks for elevation: it does not need it to
+see the screen, and elevation would only make the files it writes and the folder it opens harder to use
+afterwards - which was exactly the fault reported as "open folder still shows an error box without administrator
+rights".

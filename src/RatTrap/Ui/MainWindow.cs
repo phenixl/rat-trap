@@ -1115,13 +1115,35 @@ internal static class MainWindow
         try
         {
             Directory.CreateDirectory(directory);
-            error = null;
-            return true;
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or
                                    NotSupportedException or ArgumentException)
         {
             error = $"{ex.GetType().Name}: {ex.Message}";
+            return false;
+        }
+
+        // Existing is not the same as usable, and that difference was a real fault rather than a refinement.
+        // CreateDirectory succeeds on a directory that already exists no matter who owns it, so a folder left
+        // behind by an elevated run - owned by Administrators, inaccessible to the ordinary account that is
+        // running now - passed this check, and Explorer then refused to open it and showed its own error box.
+        // The box was Windows reporting a folder this program had just called ready. So the check is now what it
+        // should always have been: write a file, list, and delete - the three things saving and opening need.
+        string probe = Path.Combine(directory, $".rattrap-access-probe-{Environment.ProcessId}");
+        try
+        {
+            File.WriteAllText(probe, string.Empty);
+            _ = Directory.GetFileSystemEntries(directory).Length;
+            File.Delete(probe);
+            error = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            try { File.Delete(probe); } catch (Exception) { }
+            error = $"the folder exists but this account cannot use it ({ex.GetType().Name}: {ex.Message}). " +
+                    "A folder created by an elevated run is owned by Administrators and is not accessible to a " +
+                    "normal one";
             return false;
         }
     }
@@ -1145,18 +1167,36 @@ internal static class MainWindow
             // from a folder opening somewhere invisible, and there was no way to tell whether the cause was the
             // verb lookup, the marshalling of those nulls, or the shell itself. Launching Explorer directly
             // removes the verb, real strings remove the null question, and the code below removes the silence.
-            IntPtr result = User32.ShellExecuteW(_frame, "open", "explorer.exe", $"\"{directory}\"",
-                directory, User32.SW_SHOWNORMAL);
-
-            long code = result.ToInt64();
-            if (code > 32)
+            // Explorer launched directly, not through the shell. ShellExecute is the only call in this path
+            // that can raise system UI of its own, and a dialog this program cannot describe is a dialog it
+            // cannot explain; CreateProcess reports a Win32 error instead.
+            string explorer = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+            if (!File.Exists(explorer))
             {
+                AppendLog($"could not open {directory}: {explorer} is missing");
+                return;
+            }
+
+            var startup = new User32.STARTUPINFOW
+            {
+                cb = Marshal.SizeOf<User32.STARTUPINFOW>(),
+                dwFlags = (int)User32.STARTF_USESHOWWINDOW,
+                wShowWindow = (short)User32.SW_SHOWNORMAL,
+            };
+
+            if (User32.CreateProcessW(explorer, $"\"{explorer}\" \"{directory}\"", IntPtr.Zero, IntPtr.Zero,
+                    false, 0, IntPtr.Zero, directory, ref startup, out User32.PROCESS_INFORMATION process))
+            {
+                User32.CloseHandle(process.hProcess);
+                User32.CloseHandle(process.hThread);
                 AppendLog($"opened {directory}");
             }
             else
             {
-                AppendLog($"the shell refused to open {directory} (code {code}: 2 = not found, " +
-                          "5 = access denied, 31 = no association). The folder exists - the path is above.");
+                int error = Marshal.GetLastWin32Error();
+                AppendLog($"could not open {directory}: explorer.exe failed to start " +
+                          $"({error}: {new System.ComponentModel.Win32Exception(error).Message})");
             }
         }
         catch (Exception ex)

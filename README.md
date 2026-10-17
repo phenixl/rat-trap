@@ -107,7 +107,7 @@ A **relative** `savedirectory` follows the same fallback, so a portable copy tha
 cannot write still saves captures - into `%LOCALAPPDATA%\rat-trap\captures`. An **absolute** `savedirectory`
 is honoured as written even when it turns out to be unusable, because saving somewhere you did not ask for is
 worse than telling you that the place you chose cannot be written to. That check runs at start-up, not at the
-first save, so an unusable location is reported before a capture is lost rather than after.
+first save, so an unusable location is reported before a capture is lost rather than after. "Usable" means writable by this account, not merely present: a folder left behind by an earlier run as administrator exists but is not accessible to a normal one, and that case is now reported instead of passed.
 the change.
 
 ```ini

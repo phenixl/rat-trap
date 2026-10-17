@@ -306,3 +306,52 @@ program directory only, ignoring the fallback entirely, so the same unelevated r
 could not create, refused to open that folder, and would then have failed to save a capture into it. Both now
 follow one named `FallbackRoot`, and a relative `savedirectory` follows it while an absolute one is honoured as
 written.
+
+## When "the folder exists" is not the same as "the folder works"
+
+Reported twice: "open folder does nothing", then after that was fixed, "without administrator rights, opening
+the folder still shows an error box". The second report was the interesting one, because the box was not this
+program's: it was Explorer refusing to open a folder that this program had just called ready.
+
+The check tested creation, and `Directory.CreateDirectory` succeeds on a directory that already exists **whoever
+owns it**. A folder left behind by an earlier run as administrator is owned by Administrators and is inaccessible
+to the ordinary account running now, so the check passed, the folder was reported as the save location, and
+Explorer then refused it with its own error box - Windows complaining about a folder this program had just
+described as fine. Reproducing it needs no elevation at all: create a directory and deny this account (R,W) on
+it, then confirm that `CreateDirectory` still returns happily, that listing throws `UnauthorizedAccessException`,
+and that writing throws too.
+
+The check is now what it should always have been: write a file, list the directory, delete the file. Those are
+the three things that saving and opening actually need, and existence is none of them. This also removes the
+last way a capture could be lost silently, since the same probe runs at start-up.
+
+The launch beside it stopped using `ShellExecute`. It was the only call in that path able to raise system UI of
+its own, and a dialog this program cannot describe is one it cannot explain. `explorer.exe` is now started with
+`CreateProcessW` and an absolute path: no verb lookup, no association resolution, no PATH search, and a Win32
+error code to report instead of a shell code to interpret. The two structures that call depends on are asserted
+by size in the self-test (104 and 24 bytes on x64), because a struct that is a few bytes short reads the wrong
+field and still looks like it works.
+
+## The toolchain can break under an offline restore, and then nothing builds
+
+Worth recording because it looked like a code fault for several minutes. This repository has no NuGet sources at
+all - `nuget.config` clears them and restore resolves from `%USERPROFILE%\.nuget\packages`. When the SDK on this
+machine updated to 9.0.319, it began requiring `Microsoft.DotNet.ILCompiler`, `Microsoft.NET.ILLink.Tasks` and
+the 9.0.21 runtime packs, while the local cache held 9.0.20. With no sources to reach, restore failed with
+NU1100 - and it kept failing on every later build, because the failed restore had written its errors into
+`obj/project.assets.json` and each build replays them, `--no-restore` included. The gate that had passed minutes
+earlier failed at `dotnet publish`. Nothing in the source had changed.
+
+The unblock used here, and worth knowing: build the assembly without a runtime identifier, without AOT and
+without the trim/AOT analyzers, which needs none of those packs and runs on the installed runtime:
+
+```
+dotnet build src\RatTrap\RatTrap.csproj -c Release -p:RuntimeIdentifier= -p:SelfContained=false \
+  -p:PublishAot=false -p:IsAotCompatible=false -p:EnableAotAnalyzer=false \
+  -p:EnableTrimAnalyzer=false -p:EnableSingleFileAnalyzer=false -p:IsTrimmable=false -p:PublishTrimmed=false
+```
+
+That produces a framework-dependent `rattrap.dll` that runs `selftest` normally, which is enough to verify
+behaviour. It is not the release artefact: the single-file native exe and its signature still need the real
+publish, so a machine in this state needs one restore with network access (or the 9.0.21 packages placed in the
+cache) before a release can be built.

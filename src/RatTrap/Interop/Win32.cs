@@ -603,6 +603,64 @@ internal static partial class User32
     public const uint CW_USEDEFAULT = 0x80000000;
     public const uint MB_OK = 0x00000000;
     public const uint MB_ICONERROR = 0x00000010;
+
+    // --- CreateProcessW -------------------------------------------------------------------------
+    // Used instead of ShellExecute for the one place this program launches anything. ShellExecute is
+    // the only call in the folder-opening path that can raise system UI of its own, and a shell dialog
+    // is not something this program can describe or suppress. CreateProcess reports a real result.
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct STARTUPINFOW
+    {
+        public int cb;
+        public IntPtr lpReserved;
+        public IntPtr lpDesktop;
+        public IntPtr lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PROCESS_INFORMATION
+    {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    public const uint STARTF_USESHOWWINDOW = 0x00000001;
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateProcessW", StringMarshalling = StringMarshalling.Utf16,
+        SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool CreateProcessW(
+        string? lpApplicationName,
+        string? lpCommandLine,
+        IntPtr lpProcessAttributes,
+        IntPtr lpThreadAttributes,
+        [MarshalAs(UnmanagedType.Bool)] bool bInheritHandles,
+        uint dwCreationFlags,
+        IntPtr lpEnvironment,
+        string? lpCurrentDirectory,
+        ref STARTUPINFOW lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CloseHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool CloseHandle(IntPtr hObject);
     public const uint MB_ICONINFORMATION = 0x00000040;
     public const uint MB_SETFOREGROUND = 0x00010000;
 }

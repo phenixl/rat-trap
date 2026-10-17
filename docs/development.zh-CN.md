@@ -205,3 +205,27 @@ python tools\verify_cursor_output.py out\      # 对各文件格式的独立重�
 **回退路径本身绝不能抛异常。** 程序目录不可写时，设置文件会回退到 `%LOCALAPPDATA%\rat-trap`。那个回退写在 `catch` 块里，并对回退根目录调用 `Directory.CreateDirectory` 而没有自己的保护，于是在**连每用户位置也不可用**的机器上——被锁定的或重定向的配置文件，或被沙箱限制的子进程（本问题正是这样发现的）——程序打印 `FATAL: UnauthorizedAccessException ...` 并在任何窗口出现之前退出。那个**唯一目的就是优雅降级**的分支，恰恰是崩溃的那一个。现在它会报告"设置无处可写"并继续运行，因为"不保存偏好设置"是个糟糕的结果，而"拒绝启动"是更糟的。
 
 第二只 bug 也解释了为什么存盘目录必须一并修：它只相对程序目录解析，完全无视回退，于是同一次未提权运行会宣称一个它创建不了的保存路径、打开该文件夹被拒、随后保存捕获也会失败。现在两者共用同一个具名的 `FallbackRoot`，相对 `savedirectory` 跟随它，绝对路径按原样遵守。
+
+## 当"目录存在"不等于"目录可用"
+
+被报告了两次：先是"打开文件夹没有反应"，修好之后是"不是管理员模式，打开文件夹仍然弹出错框"。第二次才是关键，因为那个框**不是本程序弹的**：是 Explorer 拒绝打开一个本程序刚刚判定为可用的目录。
+
+当时的检查测的是"能否创建"，而 `Directory.CreateDirectory` 对**已经存在**的目录一律返回成功，**不管它属于谁**。先前以管理员身份运行时留下的目录，属主是 Administrators，当前这个普通账户无法访问，于是检查通过、该目录被报告为保存位置，而 Explorer 随后用自己弹出的错误框拒绝它——Windows 在抱怨一个本程序刚说没问题的目录。复现它**完全不需要提权**：新建一个目录，对这个账户拒绝 (R,W)，然后确认 `CreateDirectory` 依然愉快地返回、列举会抛 `UnauthorizedAccessException`、写入也会抛。
+
+现在的检查是它本该有的样子：写一个文件、列一次目录、删掉那个文件。这正是保存与打开真正需要的三件事，而"存在"一件都不是。这也堵掉了最后一条会静默丢失捕获的路径，因为同一个探针在启动时就会运行。
+
+顺带，旁边那个启动调用不再用 `ShellExecute`。它是这条路径上唯一能自己拉起系统 UI 的调用，而一个本程序无法描述其内容的对话框，就是它无法解释的对话框。`explorer.exe` 现在用 `CreateProcessW` 加绝对路径启动：没有动词查找、没有关联解析、没有 PATH 搜索，并且失败时返回一个可报告的 Win32 错误码，而不是一个需要猜的 shell 码。该调用依赖的两个结构体在自检里按尺寸断言（x64 上 104 和 24 字节），因为短了几个字节的结构体会读错字段，而且看起来仍然能用。
+
+## 离线还原下工具链可能坏掉，然后什么都构建不了
+
+值得记录，因为它有几分钟看起来像代码缺陷。本仓库完全没有 NuGet 源——`nuget.config` 清空了它们，还原只从 `%USERPROFILE%\.nuget\packages` 解析。当本机 SDK 更新到 9.0.319 后，它开始要求 `Microsoft.DotNet.ILCompiler`、`Microsoft.NET.ILLink.Tasks` 和 9.0.21 的运行时包，而本地缓存只有 9.0.20。没有源可达，还原就以 NU1100 失败——并且之后每次构建都继续失败，因为那次失败的还原把错误写进了 `obj/project.assets.json`，而每次构建都会重放它，`--no-restore` 也不例外。几分钟前还通过的闸门，卡在了 `dotnet publish`。源码没有任何改动。
+
+这里用的解套方式值得一提：去掉运行时标识符、去掉 AOT、去掉裁剪/AOT 分析器来构建程序集，就完全不需要那些包，并直接跑在已安装的运行时上：
+
+```
+dotnet build src\RatTrap\RatTrap.csproj -c Release -p:RuntimeIdentifier= -p:SelfContained=false \
+  -p:PublishAot=false -p:IsAotCompatible=false -p:EnableAotAnalyzer=false \
+  -p:EnableTrimAnalyzer=false -p:EnableSingleFileAnalyzer=false -p:IsTrimmable=false -p:PublishTrimmed=false
+```
+
+这会产出一个框架依赖的 `rattrap.dll`，它的 `selftest` 能正常运行，足以验证行为。但它**不是发布产物**：单文件原生 exe 及其签名仍然需要真正的发布，所以处于这种状态的机器需要一次联网还原（或把 9.0.21 的包放进缓存），才可能产出发布。

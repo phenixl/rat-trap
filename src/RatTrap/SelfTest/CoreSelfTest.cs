@@ -493,6 +493,11 @@ internal static class CoreSelfTest
         Check(lines, "DXGI_OUTDUPL_FRAME_INFO size", 48, Marshal.SizeOf<DXGI_OUTDUPL_FRAME_INFO>());
         Check(lines, "DXGI_OUTDUPL_POINTER_SHAPE_INFO size", 24, Marshal.SizeOf<DXGI_OUTDUPL_POINTER_SHAPE_INFO>());
         Check(lines, "DXGI_MAPPED_RECT size", IntPtr.Size == 8 ? 16 : 8, Marshal.SizeOf<DXGI_MAPPED_RECT>());
+
+        // The one CreateProcess call in the program depends on these two layouts, and a struct that is a few
+        // bytes short is the kind of error that works until it silently reads the wrong field.
+        Check(lines, "STARTUPINFOW size", IntPtr.Size == 8 ? 104 : 68, Marshal.SizeOf<User32.STARTUPINFOW>());
+        Check(lines, "PROCESS_INFORMATION size", IntPtr.Size == 8 ? 24 : 16, Marshal.SizeOf<User32.PROCESS_INFORMATION>());
         Check(lines, "D3D11_TEXTURE2D_DESC size", 44, Marshal.SizeOf<D3D11_TEXTURE2D_DESC>());
         Check(lines, "D3D11_MAPPED_SUBRESOURCE size", 16, Marshal.SizeOf<D3D11_MAPPED_SUBRESOURCE>());
         Check(lines, "D3D11_BOX size", 24, Marshal.SizeOf<D3D11_BOX>());
