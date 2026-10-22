@@ -355,3 +355,41 @@ That produces a framework-dependent `rattrap.dll` that runs `selftest` normally,
 behaviour. It is not the release artefact: the single-file native exe and its signature still need the real
 publish, so a machine in this state needs one restore with network access (or the 9.0.21 packages placed in the
 cache) before a release can be built.
+
+The repair that actually works, and it does not touch the committed configuration - the point of clearing the
+sources is reproducible offline restores, and a one-off source for one invocation preserves that:
+
+```
+dotnet restore src\RatTrap\RatTrap.csproj -s https://api.nuget.org/v3/index.json
+```
+
+`-s` replaces the source list for that invocation only, so `nuget.config` stays as it is and later offline builds
+still behave. On this machine it took 22 seconds through the local proxy at `127.0.0.1:7890`, and afterwards
+plain `dotnet build` and `dotnet publish` resolved from the cache with no source at all. Behind a proxy, make
+sure `HTTP_PROXY` and `HTTPS_PROXY` are set in the shell running the restore, or it will time out with a message
+that suggests the network is down rather than unsourced.
+
+## A release gate must never destroy the previous release before it can build a new one
+
+This one cost a published package. `tools/publish.ps1` deleted the output directory and then published into it,
+so when restore failed the operator was left with no package at all instead of the one they had - the gate made
+things strictly worse than not running it. Nothing was recoverable: `publish/` is gitignored, so the deleted
+artefact was never in the repository either.
+
+It now publishes into a staging directory and swaps it in as the **last** step, after the executable exists, the
+signature has been read back and the published binary has passed its own self-test. A failure at any point leaves
+the output directory untouched, discards the staging directory, and says that it did. The previous package is
+moved aside rather than deleted during the swap, so even a failure mid-swap is recoverable.
+
+The second half of the same mistake is worth stating separately. **The publish directory is also where user data
+lives.** The default save directory is relative to the executable - `captures/` beside it - and the settings file
+`rat-trap.ini` sits there too, so "replace the package" was also "delete the user's captured cursors". Both are
+now carried across the swap, because neither is build output and nothing regenerates them. Anything else in the
+folder is still treated as build output, which is the honest rule: the build produces `rattrap.exe` and
+`rattrap.pdb`, and those two names can be verified by looking at a fresh publish.
+
+Verified both ways. With a deliberate compile error injected, the script exits 1, the previous package and its
+files are still there, and no staging or backup directory is left behind. With a bracketed capture file named
+`[12,34]_0001.png` planted in `publish/captures/`, a real run reports that it kept both it and `rat-trap.ini`,
+and both are present afterwards with their contents unchanged.
+
